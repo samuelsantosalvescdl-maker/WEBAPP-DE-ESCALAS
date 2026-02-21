@@ -30,7 +30,9 @@ function getBootstrapData() {
   const ano = Number(getNamedSingleValue_(ss, 'ANO_AQUI')) || now.getFullYear();
   const mes = now.getMonth() + 1;
 
-  const empresas = getNamedRangeValues_(ss, 'EMP_COMP').flat().map(String).map(s => s.trim()).filter(Boolean);
+  const empRange = ss.getRangeByName('EMP_COMP');
+  if (!empRange) throw new Error('Intervalo nomeado não encontrado: EMP_COMP');
+  const empresas = uniqueKeepOrder_(empRange.getValues().map(r => String(r[0] || '').trim()).filter(Boolean));
   const colabData = getNamedRangeValues_(ss, 'COLAB');
   const funcData = getNamedRangeValues_(ss, 'FUNC');
 
@@ -62,6 +64,7 @@ function getBootstrapData() {
       defaultRows: CONFIG.DEFAULT_ROWS,
       timezone: CONFIG.TIMEZONE,
       yearDefault: ano,
+      monthDefault: mes,
       weekdayNames: CONFIG.WEEKDAYS_PT,
     },
   };
@@ -145,10 +148,23 @@ function getNamedRangeValues_(ss, rangeName) {
 function getNamedSingleValue_(ss, rangeName) { const v = getNamedRangeValues_(ss, rangeName); return (v[0] || [])[0] || ''; }
 function updateAnoAqui_(ss, ano) { const r = ss.getRangeByName('ANO_AQUI'); if (!r) throw new Error('ANO_AQUI não encontrado'); r.setValue(Number(ano)); }
 
+function setAnoAqui(ano) {
+  const ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+  updateAnoAqui_(ss, Number(ano));
+  return { ok: true };
+}
+
 function readDateDescMapByNamedRangeColumns_(ss, namedRange, dateOffset, descOffset) {
   const range = ss.getRangeByName(namedRange);
   if (!range) return {};
-  const values = range.getValues();
+
+  let values = range.getValues();
+  const maxOffset = Math.max(dateOffset, descOffset);
+  if (range.getNumColumns() <= maxOffset) {
+    const sheet = range.getSheet();
+    values = sheet.getRange(range.getRow(), 1, range.getNumRows(), maxOffset + 1).getValues();
+  }
+
   const out = {};
   values.forEach(r => {
     const date = r[dateOffset];
@@ -234,6 +250,10 @@ function validatePayload_(payload, opts) {
   const required = ['empresa', 'valorTaxi', 'valorRefeicao', 'valorDobra', 'emailAnalise', 'duracaoIntervalo', 'maxSemIntervalo', 'mes', 'ano', 'valorHoraFreelancer'];
   required.forEach(k => { if (payload[k] === null || payload[k] === undefined || payload[k] === '') throw new Error(`Campo obrigatório: ${k}`); });
   if (!/^\S+@\S+\.\S+$/.test(payload.emailAnalise)) throw new Error('Email inválido');
+  const ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+  const empRange = ss.getRangeByName('EMP_COMP');
+  const empresasValidas = empRange ? uniqueKeepOrder_(empRange.getValues().map(r => String(r[0] || '').trim()).filter(Boolean)) : [];
+  if (!empresasValidas.includes(String(payload.empresa || '').trim())) throw new Error('Empresa inválida para EMP_COMP');
 
   const dur = hhmmToMin_(payload.duracaoIntervalo);
   const maxSem = hhmmToMin_(payload.maxSemIntervalo);
@@ -461,16 +481,54 @@ function getWeatherForTiradentes_(ano, mes) {
     const item = (geo.results || [])[0];
     if (!item) return {};
 
-    const start = `${ano}-${String(mes).padStart(2, '0')}-01`;
-    const endDate = new Date(ano, mes, 0).getDate();
-    const end = `${ano}-${String(mes).padStart(2, '0')}-${String(endDate).padStart(2, '0')}`;
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${item.latitude}&longitude=${item.longitude}&daily=temperature_2m_min,temperature_2m_max,precipitation_probability_max&timezone=America%2FSao_Paulo&start_date=${start}&end_date=${end}`;
-    const data = JSON.parse(UrlFetchApp.fetch(url, { muteHttpExceptions: true }).getContentText() || '{}');
+    const tz = CONFIG.TIMEZONE;
+    const today = new Date(Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd') + 'T00:00:00');
+    const start = new Date(Number(ano), Number(mes) - 1, 1);
+    const end = new Date(Number(ano), Number(mes), 0);
+
     const out = {};
-    const daily = data.daily || {};
-    (daily.time || []).forEach((t, idx) => {
-      out[t] = { min: daily.temperature_2m_min ? daily.temperature_2m_min[idx] : '—', max: daily.temperature_2m_max ? daily.temperature_2m_max[idx] : '—', rain: daily.precipitation_probability_max ? daily.precipitation_probability_max[idx] : '—' };
-    });
+    const fmt = d => Utilities.formatDate(d, tz, 'yyyy-MM-dd');
+    const addDaily = daily => {
+      (daily.time || []).forEach((t, idx) => {
+        out[t] = {
+          min: daily.temperature_2m_min ? daily.temperature_2m_min[idx] : '—',
+          max: daily.temperature_2m_max ? daily.temperature_2m_max[idx] : '—',
+          rain: daily.precipitation_probability_max ? daily.precipitation_probability_max[idx] : '—',
+        };
+      });
+    };
+
+    const fetchArchive = (sDate, eDate) => {
+      if (sDate > eDate) return;
+      const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${item.latitude}&longitude=${item.longitude}&daily=temperature_2m_min,temperature_2m_max,precipitation_probability_max&timezone=America%2FSao_Paulo&start_date=${fmt(sDate)}&end_date=${fmt(eDate)}`;
+      const data = JSON.parse(UrlFetchApp.fetch(url, { muteHttpExceptions: true }).getContentText() || '{}');
+      addDaily(data.daily || {});
+    };
+    const fetchForecast = (sDate, eDate) => {
+      if (sDate > eDate) return;
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${item.latitude}&longitude=${item.longitude}&daily=temperature_2m_min,temperature_2m_max,precipitation_probability_max&timezone=America%2FSao_Paulo&start_date=${fmt(sDate)}&end_date=${fmt(eDate)}`;
+      const data = JSON.parse(UrlFetchApp.fetch(url, { muteHttpExceptions: true }).getContentText() || '{}');
+      addDaily(data.daily || {});
+    };
+
+    const horizon = new Date(today);
+    horizon.setDate(horizon.getDate() + 16);
+
+    if (end < today) {
+      fetchArchive(start, end);
+    } else if (start <= today && end >= today) {
+      const yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
+      fetchArchive(start, yesterday);
+      const futureEnd = end < horizon ? end : horizon;
+      fetchForecast(today, futureEnd);
+    } else if (start > horizon) {
+      cache.put(key, JSON.stringify({}), 21600);
+      return {};
+    } else {
+      const futureEnd = end < horizon ? end : horizon;
+      fetchForecast(start, futureEnd);
+    }
+
     cache.put(key, JSON.stringify(out), 21600);
     return out;
   } catch (e) {
@@ -491,4 +549,5 @@ function minToHHMM_(m) { const sign = m < 0 ? '-' : ''; const abs = Math.abs(m);
 function toMoney_(n) { return Number(n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }); }
 function dateKey_(d) { return Utilities.formatDate(new Date(d), CONFIG.TIMEZONE, 'yyyy-MM-dd'); }
 function safeJsonParse_(s) { try { return JSON.parse(s); } catch (e) { return null; } }
+function uniqueKeepOrder_(arr) { const seen = new Set(); return arr.filter(v => (seen.has(v) ? false : (seen.add(v), true))); }
 function generateProtocol_() { return `PRT-${Utilities.formatDate(new Date(), CONFIG.TIMEZONE, 'yyyyMMdd_HHmmss')}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`; }

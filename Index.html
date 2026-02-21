@@ -21,7 +21,7 @@
     .sticky-head{position:sticky;top:0;z-index:5}
     .sticky-head-2{position:sticky;top:36px;z-index:5;background:#fcf4e8}
     .sticky-col{position:sticky;left:0;z-index:4;background:#fff}
-    .sticky-col-1{left:0}.sticky-col-2{left:220px}.sticky-col-3{left:380px}.sticky-col-4{left:500px}
+    .sticky-col-1{left:0}
     .status{border-left:3px solid transparent}
     .status-Folga{background:#f4f9ff;border-left-color:#8ab8e8}
     .status-Dom{background:#fff6f6;border-left-color:#eb9a9a}
@@ -57,6 +57,10 @@ let bootstrap=null;
 let cellErrors={};
 let model={empresa:'',rows:[],feriados:{},eventos:{},prevFat:{},weather:{},freelancerCount:0,weekdayNames:['domingo','segunda-feira','terça-feira','quarta-feira','quinta-feira','sexta-feira','sábado']};
 const specialStatuses=['Folga','Abatimento','Dom. mês','Licença','Férias'];
+const empresaEl = document.getElementById('empresa');
+const empresaListEl = document.getElementById('empresaList');
+const headerFieldsEl = document.getElementById('headerFields');
+const tableWrapEl = document.getElementById('tableWrap');
 
 function init(){
   setLoading(true);
@@ -64,12 +68,12 @@ function init(){
     bootstrap=d;
     model.feriados=d.feriados||{}; model.eventos=d.eventos||{}; model.prevFat=d.prevFat||{}; model.weather=d.weather||{};
     model.weekdayNames=(d.config&&d.config.weekdayNames)||model.weekdayNames;
-    empresaList.innerHTML=(d.empresas||[]).map(e=>`<option value="${e}"></option>`).join('');
-    empresa.onchange=onEmpresaChange; renderHeaderFields(); setLoading(false);
+    empresaListEl.innerHTML=(d.empresas||[]).map(e=>`<option value="${e}"></option>`).join('');
+    empresaEl.onchange=onEmpresaChange; renderHeaderFields(); setLoading(false);
   }).withFailureHandler(e=>{setLoading(false); alert(e.message||e)}).getBootstrapData();
 }
 
-function setLoading(on){ tableWrap.innerHTML=on?'<div class="loading">Carregando...</div>':tableWrap.innerHTML; }
+function setLoading(on){ tableWrapEl.innerHTML=on?'<div class="loading">Carregando...</div>':tableWrapEl.innerHTML; }
 function v(id){return document.getElementById(id).value}
 function field(id,l,t,val){return `<div class="field"><label>${l}</label><input id="${id}" type="${t}" value="${val??''}"></div>`}
 function daysInMonth(){return new Date(Number(v('ano')),Number(v('mes')),0).getDate()}
@@ -77,19 +81,49 @@ function dateKey(day){return `${v('ano')}-${String(v('mes')).padStart(2,'0')}-${
 function dateLabel(day){const d=new Date(Number(v('ano')),Number(v('mes'))-1,day);return `${String(day).padStart(2,'0')}/${String(v('mes')).padStart(2,'0')}/${v('ano')} (${model.weekdayNames[d.getDay()]})`}
 
 function renderHeaderFields(){
-  headerFields.innerHTML=`<div class="row">${field('valorTaxi','Valor Taxi','number','0')}${field('valorRefeicao','Valor Refeição','number','0')}${field('valorDobra','Valor Dobra','number','0')}${field('emailAnalise','Email análise','email','')}${field('duracaoIntervalo','Tempo intervalo HH:MM','text','01:00')}</div><div class="row">${field('maxSemIntervalo','Tempo máx sem intervalo','text','06:00')}${field('protocolo','Protocolo(s)','text','')}${field('mes','Mês','number','')}${field('ano','Ano','number',new Date().getFullYear())}${field('valorHoraFreelancer','Valor hora freelancer','number','0')}</div>`;
-  ['mes','ano'].forEach(id=>document.getElementById(id).addEventListener('change', ()=>{setLoading(true); setTimeout(()=>{syncDays(); validateAllClient(); renderTable(); setLoading(false)},80)}));
+  headerFieldsEl.innerHTML=`<div class="row">${field('valorTaxi','Valor Taxi','number','0')}${field('valorRefeicao','Valor Refeição','number','0')}${field('valorDobra','Valor Dobra','number','0')}${field('emailAnalise','Email análise','email','')}${field('duracaoIntervalo','Tempo intervalo HH:MM','text','01:00')}</div><div class="row">${field('maxSemIntervalo','Tempo máx sem intervalo','text','06:00')}${field('protocolo','Protocolo(s)','text','')}${field('mes','Mês','number','')}${field('ano','Ano','number',new Date().getFullYear())}${field('valorHoraFreelancer','Valor hora freelancer','number','0')}</div>`;
+  const mesEl = document.getElementById('mes');
+  const anoEl = document.getElementById('ano');
+  if (!mesEl.value && bootstrap?.config?.monthDefault) mesEl.value = bootstrap.config.monthDefault;
+  if (!anoEl.value && bootstrap?.config?.yearDefault) anoEl.value = bootstrap.config.yearDefault;
+
+  let anoTimer = null;
+  mesEl.addEventListener('change', ()=>{setLoading(true); setTimeout(()=>{syncDays(); validateAllClient(); renderTable(); setLoading(false)},80)});
+  anoEl.addEventListener('change', ()=>{
+    clearTimeout(anoTimer);
+    anoTimer = setTimeout(()=>{
+      const ano = Number(anoEl.value);
+      google.script.run.withFailureHandler(()=>{}).setAnoAqui(ano);
+      setLoading(true);
+      setTimeout(()=>{syncDays(); validateAllClient(); renderTable(); setLoading(false)},80);
+    },200);
+  });
 }
 
 function onEmpresaChange(){
-  const emp=v('empresa').trim(); if(!(bootstrap.empresas||[]).includes(emp)) return;
+  const emp=v('empresa').trim();
+  if(!(bootstrap.empresas||[]).includes(emp)) return;
+
+  const mesEl = document.getElementById('mes');
+  const anoEl = document.getElementById('ano');
+  if (!mesEl.value) mesEl.value = bootstrap?.config?.monthDefault || (new Date().getMonth()+1);
+  if (!anoEl.value) anoEl.value = bootstrap?.config?.yearDefault || new Date().getFullYear();
+
   setLoading(true);
-  setTimeout(()=>{model.empresa=emp; model.rows=[]; model.freelancerCount=0; for(let i=0;i<2;i++) addRow(false); validateAllClient(); renderTable(); setLoading(false)},80);
+  google.script.run.withSuccessHandler(()=>{
+    model.empresa=emp; model.rows=[]; model.freelancerCount=0;
+    for(let i=0;i<(bootstrap?.config?.defaultRows||2);i++) addRow(false);
+    syncDays();
+    validateAllClient();
+    renderTable();
+    setLoading(false);
+  }).withFailureHandler(e=>{ setLoading(false); alert(e.message||e); }).setAnoAqui(Number(anoEl.value));
 }
 
 function createEmptyDay(){return {entrada:'',intervalo:'',saida:'',exceptionMaxSemInt:false,exceptionExtra:false,exceptionEscala:false,isDobra:false}}
 function addRow(render=true){ if(!model.empresa) return; if(model.rows.length>=100) return; const d=(Number(v('mes'))&&Number(v('ano')))?daysInMonth():31; model.rows.push({nome:'',funcao:'',escala:'',jornada:'',isFreelancer:false,days:Array.from({length:d},createEmptyDay)}); if(render){validateAllClient(); renderTable();}}
 function removeRow(){ if(model.rows.length<=2) return; model.rows.pop(); validateAllClient(); renderTable();}
+function removeRowAt(ri){ if(model.rows.length<=2) return; model.rows.splice(ri,1); validateAllClient(); renderTable(); }
 function syncDays(){ const d=Number(v('mes'))&&Number(v('ano') )?daysInMonth():31; model.rows.forEach(r=>r.days=Array.from({length:d},(_,i)=>r.days[i]||createEmptyDay())); }
 
 function normalizeStatusOrTime(raw){
@@ -204,17 +238,17 @@ function onPasteCell(ev,ri,di,field){
 }
 
 function renderTable(){
-  const mes=Number(v('mes')),ano=Number(v('ano')); if(!mes||!ano||!model.empresa){tableWrap.innerHTML=''; return}
+  const mes=Number(v('mes')),ano=Number(v('ano')); if(!mes||!ano||!model.empresa){tableWrapEl.innerHTML=''; return}
   let h='<table><tr>';
-  h+='<th class="sticky-head sticky-col sticky-col-1">Colaborador/Freela</th><th class="sticky-head sticky-col sticky-col-2">Função</th><th class="sticky-head sticky-col sticky-col-3">Escala</th><th class="sticky-head sticky-col sticky-col-4">Jornada</th>';
+  h+='<th class="sticky-head sticky-col sticky-col-1">Linha</th><th class="sticky-head">Função</th><th class="sticky-head">Escala</th><th class="sticky-head">Jornada</th>';
   for(let d=1;d<=daysInMonth();d++) h+=`<th class='sticky-head' colspan='4'>${dateLabel(d)}<br><span class='small'>${headerObs(d)}</span></th>`;
   h+='<th class="sticky-head">Resumo</th></tr><tr>';
-  h+='<th class="sticky-head-2 sticky-col sticky-col-1"></th><th class="sticky-head-2 sticky-col sticky-col-2"></th><th class="sticky-head-2 sticky-col sticky-col-3"></th><th class="sticky-head-2 sticky-col sticky-col-4"></th>';
+  h+='<th class="sticky-head-2 sticky-col sticky-col-1"></th><th class="sticky-head-2"></th><th class="sticky-head-2"></th><th class="sticky-head-2"></th>';
   for(let d=1;d<=daysInMonth();d++) h+="<th class='sticky-head-2'>E</th><th class='sticky-head-2'>I</th><th class='sticky-head-2'>S</th><th class='sticky-head-2'>Exc</th>";
   h+='<th class="sticky-head-2"></th></tr>';
 
   model.rows.forEach((r,ri)=>{
-    h+=`<tr><td class='sticky-col sticky-col-1'>${colabEditor(ri,r)}</td><td class='sticky-col sticky-col-2'>${funcEditor(ri,r)}</td><td class='sticky-col sticky-col-3'>${r.escala||''}</td><td class='sticky-col sticky-col-4'>${r.jornada||''}</td>`;
+    h+=`<tr><td class='sticky-col sticky-col-1'><button class='chip' onclick='removeRowAt(${ri})'>🗑</button><br>${colabEditor(ri,r)}</td><td>${funcEditor(ri,r)}</td><td>${r.escala||''}</td><td>${r.jornada||''}</td>`;
     r.days.forEach((c,di)=>{
       ['entrada','intervalo','saida'].forEach(f=>{
         const err=getError(ri,di,f),cls=cellClass(ri,di,f,c),t=err?`title="${err}"`:'';
@@ -226,7 +260,7 @@ function renderTable(){
   });
 
   h+=`</table><datalist id='statusList'>${specialStatuses.map(s=>`<option value='${s}'></option>`).join('')}</datalist>`;
-  tableWrap.innerHTML=h;
+  tableWrapEl.innerHTML=h;
 }
 
 function buildPayload(){return {empresa:v('empresa'),valorTaxi:Number(v('valorTaxi')),valorRefeicao:Number(v('valorRefeicao')),valorDobra:Number(v('valorDobra')),emailAnalise:v('emailAnalise'),duracaoIntervalo:v('duracaoIntervalo'),maxSemIntervalo:v('maxSemIntervalo'),protocolo:v('protocolo'),mes:Number(v('mes')),ano:Number(v('ano')),valorHoraFreelancer:Number(v('valorHoraFreelancer')),rows:model.rows,feriados:model.feriados,eventos:model.eventos,prevFat:model.prevFat}}
@@ -238,7 +272,7 @@ function envioColab(){google.script.run.withSuccessHandler(r=>alert(`PDF colabor
 function loadProtocols(){
   google.script.run.withSuccessHandler(r=>{
     if(!r.merged) return alert((r.warnings||[]).join('\n')||'Nada para carregar');
-    const p=r.merged; empresa.value=p.empresa; onEmpresaChange();
+    const p=r.merged; empresaEl.value=p.empresa; onEmpresaChange();
     ['valorTaxi','valorRefeicao','valorDobra','emailAnalise','duracaoIntervalo','maxSemIntervalo','mes','ano','valorHoraFreelancer','protocolo'].forEach(k=>{if(document.getElementById(k)&&p[k]!==undefined) document.getElementById(k).value=p[k]});
     model.rows=p.rows||model.rows; validateAllClient(); renderTable(); if((r.warnings||[]).length) alert(r.warnings.join('\n'));
   }).withFailureHandler(e=>alert(e.message||e)).loadProtocols(v('protocolos'));
