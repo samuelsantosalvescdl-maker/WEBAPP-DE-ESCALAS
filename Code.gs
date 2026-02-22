@@ -17,6 +17,12 @@ const ESCAL_HEADERS = [
   'PayloadJSON', 'LinkPdfAnalise', 'LinkPdfColaboradores', 'LinkPdfCopia', 'CriadoEm', 'AtualizadoEm',
 ];
 
+function getBestLock_() {
+  try { const l = LockService.getScriptLock(); if (l) return l; } catch (e) {}
+  try { const l = LockService.getDocumentLock(); if (l) return l; } catch (e) {}
+  return null;
+}
+
 function doGet() {
   return HtmlService.createTemplateFromFile('Index')
     .evaluate()
@@ -102,8 +108,8 @@ function loadProtocols(protocolList) {
 
 function saveAndGeneratePdfAnalise(payload) {
   validatePayload_(payload, { strictForSubmit: true });
-  const lock = LockService.getDocumentLock();
-  lock.waitLock(30000);
+  const lock = getBestLock_();
+  if (lock) lock.waitLock(30000);
   try {
     const ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
     ensureEscalHeader_(ss);
@@ -124,7 +130,7 @@ function saveAndGeneratePdfAnalise(payload) {
 
     return { ok: true, protocol, pdfLink, emailError: emailErr || null };
   } finally {
-    lock.releaseLock();
+    if (lock) lock.releaseLock();
   }
 }
 
@@ -149,9 +155,15 @@ function getNamedSingleValue_(ss, rangeName) { const v = getNamedRangeValues_(ss
 function updateAnoAqui_(ss, ano) { const r = ss.getRangeByName('ANO_AQUI'); if (!r) throw new Error('ANO_AQUI não encontrado'); r.setValue(Number(ano)); }
 
 function setAnoAqui(ano) {
-  const ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
-  updateAnoAqui_(ss, Number(ano));
-  return { ok: true };
+  const lock = getBestLock_();
+  if (lock) lock.waitLock(5000);
+  try {
+    const ss = SpreadsheetApp.openById(CONFIG.SPREADSHEET_ID);
+    updateAnoAqui_(ss, Number(ano));
+    return { ok: true };
+  } finally {
+    if (lock) lock.releaseLock();
+  }
 }
 
 function readDateDescMapByNamedRangeColumns_(ss, namedRange, dateOffset, descOffset) {
@@ -217,6 +229,9 @@ function appendEscal_(ss, params) {
 }
 
 function appendDobrasHistory_(ss, payload, analysis) {
+  const lock = getBestLock_();
+  if (lock) lock.waitLock(5000);
+  try {
   const colabRange = ss.getRangeByName('COLAB');
   const sheet = colabRange.getSheet();
   const values = colabRange.getValues();
@@ -234,6 +249,9 @@ function appendDobrasHistory_(ss, payload, analysis) {
   });
 
   updates.forEach(u => sheet.getRange(colabRange.getRow() + u.idx, colabRange.getColumn() + 8).setValue(u.newVal));
+  } finally {
+    if (lock) lock.releaseLock();
+  }
 }
 
 function mergePayloads_(a, b) {
@@ -396,8 +414,7 @@ function buildAnaliseHtml_(payload, analysis, opts) {
   const daysInMonth = new Date(payload.ano, payload.mes, 0).getDate();
   let blocks = '';
   for (let d = 1; d <= daysInMonth; d++) {
-    const pageClass = d % 7 === 1 ? 'force-break' : '';
-    blocks += `<section class="day-block ${pageClass}"><h3>${formatDateFullPt_(payload.ano, payload.mes, d)} ${buildHeaderObs_(payload, d, opts.showPrevFat)}</h3>${buildDayGridHtml_(payload, d, opts.showDobraText)}</section>`;
+    blocks += `<section class="day-block"><h3>${formatDateFullPt_(payload.ano, payload.mes, d)} ${buildHeaderObs_(payload, d, opts.showPrevFat)}</h3>${buildDayGridHtml_(payload, d, opts.showDobraText)}</section>`;
   }
 
   return `<html><head><meta charset="utf-8"/><style>${pdfCss_()}</style></head><body>
@@ -418,7 +435,7 @@ function buildWeeklyHtml_(payload, options) {
   let out = `<html><head><meta charset="utf-8"/><style>${pdfCss_()}</style></head><body><h1>${options.title} - ${payload.empresa}</h1>`;
   for (let start = 1; start <= daysInMonth; start += 7) {
     const end = Math.min(daysInMonth, start + 6);
-    out += `<section class="week-block force-break"><h2>Dias ${start} a ${end}</h2><table><tr><th>Nome</th>`;
+    out += `<section class="week-block"><h2>Dias ${start} a ${end}</h2><table><tr><th>Nome</th>`;
     for (let d = start; d <= end; d++) out += `<th>${formatDateFullPt_(payload.ano, payload.mes, d)} ${buildHeaderObs_(payload, d, options.showPrevFat)}</th>`;
     out += '</tr>';
     (payload.rows || []).forEach(row => {
@@ -440,9 +457,32 @@ function buildWeeklyHtml_(payload, options) {
 
 function transformCellForColabPdf_(row, cell, payload) {
   const c = JSON.parse(JSON.stringify(cell || {}));
+  const norm = normalizeDayCell_(c, row);
+  c.entrada = norm.entrada;
+  c.intervalo = norm.intervalo;
+  c.saida = norm.saida;
+
+  if (row.isFreelancer) {
+    c.isDobra = false;
+    return c;
+  }
+
   if (c.exceptionEscala) c.entrada = c.intervalo = c.saida = 'Folga';
-  if (c.exceptionExtra && isHHMMAllowOver24_(c.entrada) && isHHMM_(row.jornada || '')) c.saida = minToHHMM_(hhmmToMin_(c.entrada) + hhmmToMin_(row.jornada) + hhmmToMin_(payload.duracaoIntervalo));
-  if (c.exceptionMaxSemInt && isHHMMAllowOver24_(c.entrada) && isHHMM_(row.jornada || '')) c.intervalo = minToHHMM_(hhmmToMin_(c.entrada) + Math.round((hhmmToMin_(row.jornada) / 2) / 30) * 30);
+
+  if (c.exceptionExtra && isHHMMAllowOver24_(c.entrada) && isHHMM_(row.jornada || '')) {
+    const calc = hhmmToMin_(c.entrada) + hhmmToMin_(row.jornada) + hhmmToMin_(payload.duracaoIntervalo);
+    c.saida = minToHHMM_(calc);
+  }
+
+  if (c.exceptionMaxSemInt && isHHMMAllowOver24_(c.entrada) && isHHMM_(row.jornada || '')) {
+    const mid = hhmmToMin_(c.entrada) + Math.round((hhmmToMin_(row.jornada) / 2) / 30) * 30;
+    c.intervalo = minToHHMM_(mid);
+  }
+
+  if (isHHMMAllowOver24_(c.entrada) && isHHMMAllowOver24_(c.saida) && hhmmToMin_(c.saida) < hhmmToMin_(c.entrada)) {
+    c.saida = minToHHMM_(hhmmToMin_(c.saida) + 1440);
+  }
+
   c.isDobra = false;
   return c;
 }
@@ -467,7 +507,11 @@ function buildDayGridHtml_(payload, day, showDobraText) {
   return `<table><tr><th>Nome</th><th>Horários</th></tr>${rows}</table>`;
 }
 function pdfCss_() {
-  return `body{font-family:Arial,sans-serif;font-size:10px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #bbb;padding:4px}.day-block,.week-block{break-inside:avoid;page-break-inside:avoid}.first{page-break-after:always}.force-break{page-break-before:auto}`;
+  return `body{font-family:Arial,sans-serif;font-size:10px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #bbb;padding:4px}.day-block,.week-block{break-inside:avoid;page-break-inside:avoid}.first{page-break-after:always}.week-block + .week-block{page-break-before:always}`;
+}
+
+function getWeatherForMonth(ano, mes) {
+  return getWeatherForTiradentes_(Number(ano), Number(mes));
 }
 
 function getWeatherForTiradentes_(ano, mes) {

@@ -18,6 +18,16 @@
     table{border-collapse:separate;border-spacing:0;min-width:100%}
     th,td{border-right:1px solid #f0ede8;border-bottom:1px solid #f0ede8;padding:4px;font-size:12px;white-space:nowrap}
     th{background:#f6e9d6}
+    .sticky-head.sticky-col{background:#f6e9d6 !important}
+    .sticky-head-2{background:#fcf4e8}
+    .sticky-head-2.sticky-col{background:#fcf4e8 !important}
+    .exc-stack{display:flex;flex-direction:column;gap:4px;align-items:stretch}
+    .exc-stack .chip{margin-right:0;text-align:center}
+    .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;z-index:9999}
+    .modal{background:#fff;border-radius:14px;padding:14px;width:min(520px,92vw);border:1px solid #e7e2d9}
+    .modal-title{font-weight:700;margin-bottom:8px}
+    .modal-body{margin-bottom:10px}
+    .hidden{display:none}
     .sticky-head{position:sticky;top:0;z-index:5}
     .sticky-head-2{position:sticky;top:36px;z-index:5;background:#fcf4e8}
     .sticky-col{position:sticky;left:0;z-index:4;background:#fff}
@@ -52,6 +62,17 @@
     <button onclick="envioColab()">Envio colaboradores</button>
   </div>
 
+
+  <div id="modalOverlay" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-title" id="modalTitle"></div>
+      <div class="modal-body" id="modalBody"></div>
+      <div class="modal-actions">
+        <button onclick="closeModal()">Fechar</button>
+      </div>
+    </div>
+  </div>
+
 <script>
 let bootstrap=null;
 let cellErrors={};
@@ -61,6 +82,9 @@ const empresaEl = document.getElementById('empresa');
 const empresaListEl = document.getElementById('empresaList');
 const headerFieldsEl = document.getElementById('headerFields');
 const tableWrapEl = document.getElementById('tableWrap');
+const modalOverlayEl = document.getElementById('modalOverlay');
+const modalTitleEl = document.getElementById('modalTitle');
+const modalBodyEl = document.getElementById('modalBody');
 
 function init(){
   setLoading(true);
@@ -74,11 +98,23 @@ function init(){
 }
 
 function setLoading(on){ tableWrapEl.innerHTML=on?'<div class="loading">Carregando...</div>':tableWrapEl.innerHTML; }
+function escapeAttr(s){ return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+function showPdfModal(title,url,extraMsg){
+  modalTitleEl.textContent=title;
+  modalBodyEl.innerHTML=`<div style="margin-bottom:8px">${extraMsg||''}</div><a href="${escapeAttr(url)}" target="_blank" rel="noopener">Abrir PDF</a>`;
+  modalOverlayEl.classList.remove('hidden');
+}
+function closeModal(){ modalOverlayEl.classList.add('hidden'); }
 function v(id){return document.getElementById(id).value}
 function field(id,l,t,val){return `<div class="field"><label>${l}</label><input id="${id}" type="${t}" value="${val??''}"></div>`}
 function daysInMonth(){return new Date(Number(v('ano')),Number(v('mes')),0).getDate()}
 function dateKey(day){return `${v('ano')}-${String(v('mes')).padStart(2,'0')}-${String(day).padStart(2,'0')}`}
 function dateLabel(day){const d=new Date(Number(v('ano')),Number(v('mes'))-1,day);return `${String(day).padStart(2,'0')}/${String(v('mes')).padStart(2,'0')}/${v('ano')} (${model.weekdayNames[d.getDay()]})`}
+function refreshWeather(){
+  const ano=Number(v('ano')), mes=Number(v('mes'));
+  if(!ano || !mes) return;
+  google.script.run.withSuccessHandler(w=>{ model.weather=w||{}; renderTable(); }).withFailureHandler(()=>{}).getWeatherForMonth(ano,mes);
+}
 
 function renderHeaderFields(){
   headerFieldsEl.innerHTML=`<div class="row">${field('valorTaxi','Valor Taxi','number','0')}${field('valorRefeicao','Valor Refeição','number','0')}${field('valorDobra','Valor Dobra','number','0')}${field('emailAnalise','Email análise','email','')}${field('duracaoIntervalo','Tempo intervalo HH:MM','text','01:00')}</div><div class="row">${field('maxSemIntervalo','Tempo máx sem intervalo','text','06:00')}${field('protocolo','Protocolo(s)','text','')}${field('mes','Mês','number','')}${field('ano','Ano','number',new Date().getFullYear())}${field('valorHoraFreelancer','Valor hora freelancer','number','0')}</div>`;
@@ -88,14 +124,14 @@ function renderHeaderFields(){
   if (!anoEl.value && bootstrap?.config?.yearDefault) anoEl.value = bootstrap.config.yearDefault;
 
   let anoTimer = null;
-  mesEl.addEventListener('change', ()=>{setLoading(true); setTimeout(()=>{syncDays(); validateAllClient(); renderTable(); setLoading(false)},80)});
+  mesEl.addEventListener('change', ()=>{setLoading(true); setTimeout(()=>{syncDays(); validateAllClient(); renderTable(); refreshWeather(); setLoading(false)},80)});
   anoEl.addEventListener('change', ()=>{
     clearTimeout(anoTimer);
     anoTimer = setTimeout(()=>{
       const ano = Number(anoEl.value);
       google.script.run.withFailureHandler(()=>{}).setAnoAqui(ano);
       setLoading(true);
-      setTimeout(()=>{syncDays(); validateAllClient(); renderTable(); setLoading(false)},80);
+      setTimeout(()=>{syncDays(); validateAllClient(); renderTable(); refreshWeather(); setLoading(false)},80);
     },200);
   });
 }
@@ -116,6 +152,7 @@ function onEmpresaChange(){
     syncDays();
     validateAllClient();
     renderTable();
+    refreshWeather();
     setLoading(false);
   }).withFailureHandler(e=>{ setLoading(false); alert(e.message||e); }).setAnoAqui(Number(anoEl.value));
 }
@@ -244,17 +281,17 @@ function renderTable(){
   for(let d=1;d<=daysInMonth();d++) h+=`<th class='sticky-head' colspan='4'>${dateLabel(d)}<br><span class='small'>${headerObs(d)}</span></th>`;
   h+='<th class="sticky-head">Resumo</th></tr><tr>';
   h+='<th class="sticky-head-2 sticky-col sticky-col-1"></th><th class="sticky-head-2"></th><th class="sticky-head-2"></th><th class="sticky-head-2"></th>';
-  for(let d=1;d<=daysInMonth();d++) h+="<th class='sticky-head-2'>E</th><th class='sticky-head-2'>I</th><th class='sticky-head-2'>S</th><th class='sticky-head-2'>Exc</th>";
+  for(let d=1;d<=daysInMonth();d++) h+="<th class='sticky-head-2'>Entrada</th><th class='sticky-head-2'>Intervalo</th><th class='sticky-head-2'>Saída</th><th class='sticky-head-2'>Exceções</th>";
   h+='<th class="sticky-head-2"></th></tr>';
 
   model.rows.forEach((r,ri)=>{
     h+=`<tr><td class='sticky-col sticky-col-1'><button class='chip' onclick='removeRowAt(${ri})'>🗑</button><br>${colabEditor(ri,r)}</td><td>${funcEditor(ri,r)}</td><td>${r.escala||''}</td><td>${r.jornada||''}</td>`;
     r.days.forEach((c,di)=>{
       ['entrada','intervalo','saida'].forEach(f=>{
-        const err=getError(ri,di,f),cls=cellClass(ri,di,f,c),t=err?`title="${err}"`:'';
-        h+=`<td class='${cls}' ${t}><input value='${c[f]||''}' onchange='setCell(${ri},${di},"${f}",this.value)' onpaste='onPasteCell(event,${ri},${di},"${f}")' list='statusList' style='width:76px;border-radius:7px'></td>`;
+        const err=getError(ri,di,f),cls=cellClass(ri,di,f,c),t=err?` title="${escapeAttr(err)}"`:'';
+        h+=`<td class='${cls}'><input${t} value='${c[f]||''}' onchange='setCell(${ri},${di},"${f}",this.value)' onpaste='onPasteCell(event,${ri},${di},"${f}")' list='statusList' style='width:76px;border-radius:7px'></td>`;
       });
-      h+=`<td><button class='chip' onclick='toggleExc(${ri},${di},"exceptionMaxSemInt")'>M</button><button class='chip' onclick='toggleExc(${ri},${di},"exceptionExtra")'>+2</button><button class='chip' onclick='toggleExc(${ri},${di},"exceptionEscala")'>Esc</button><button class='chip' onclick='toggleExc(${ri},${di},"isDobra")'>D</button></td>`;
+      h+=`<td><div class='exc-stack'><button class='chip' onclick='toggleExc(${ri},${di},"exceptionMaxSemInt")'>Descanso int.</button><button class='chip' onclick='toggleExc(${ri},${di},"exceptionExtra")'>+02:00</button><button class='chip' onclick='toggleExc(${ri},${di},"exceptionEscala")'>Escala sem.</button><button class='chip' onclick='toggleExc(${ri},${di},"isDobra")'>Dobra</button></div></td>`;
     });
     h+=`<td>${rowIndicators(r,ri)}</td></tr>`;
   });
@@ -265,9 +302,9 @@ function renderTable(){
 
 function buildPayload(){return {empresa:v('empresa'),valorTaxi:Number(v('valorTaxi')),valorRefeicao:Number(v('valorRefeicao')),valorDobra:Number(v('valorDobra')),emailAnalise:v('emailAnalise'),duracaoIntervalo:v('duracaoIntervalo'),maxSemIntervalo:v('maxSemIntervalo'),protocolo:v('protocolo'),mes:Number(v('mes')),ano:Number(v('ano')),valorHoraFreelancer:Number(v('valorHoraFreelancer')),rows:model.rows,feriados:model.feriados,eventos:model.eventos,prevFat:model.prevFat}}
 
-function enviarAnalise(){validateAllClient(); if(Object.keys(cellErrors).length) return alert('Existem erros destacados em amarelo. Corrija ou aplique exceções.'); google.script.run.withSuccessHandler(r=>alert(`Protocolo: ${r.protocol}\nPDF: ${r.pdfLink}${r.emailError?`\nFalha e-mail: ${r.emailError}`:''}`)).withFailureHandler(e=>alert(e.message||e)).saveAndGeneratePdfAnalise(buildPayload())}
-function salvarCopia(){google.script.run.withSuccessHandler(r=>alert(`PDF cópia: ${r.pdfLink}`)).withFailureHandler(e=>alert(e.message||e)).generatePdfCopia(buildPayload())}
-function envioColab(){google.script.run.withSuccessHandler(r=>alert(`PDF colaboradores: ${r.pdfLink}`)).withFailureHandler(e=>alert(e.message||e)).generatePdfColaboradores(buildPayload())}
+function enviarAnalise(){validateAllClient(); if(Object.keys(cellErrors).length) return alert('Existem erros destacados em amarelo. Corrija ou aplique exceções.'); google.script.run.withSuccessHandler(r=>{const extra=`Protocolo: ${escapeAttr(r.protocol||'')}<br>${r.emailError?`Falha ao enviar e-mail: ${escapeAttr(r.emailError)}`:'E-mail enviado (quando configurado).'}`; showPdfModal('PDF de Análise', r.pdfLink, extra);}).withFailureHandler(e=>alert(e.message||e)).saveAndGeneratePdfAnalise(buildPayload())}
+function salvarCopia(){google.script.run.withSuccessHandler(r=>showPdfModal('PDF - Salvar cópia', r.pdfLink)).withFailureHandler(e=>alert(e.message||e)).generatePdfCopia(buildPayload())}
+function envioColab(){google.script.run.withSuccessHandler(r=>showPdfModal('PDF - Envio colaboradores', r.pdfLink)).withFailureHandler(e=>alert(e.message||e)).generatePdfColaboradores(buildPayload())}
 
 function loadProtocols(){
   google.script.run.withSuccessHandler(r=>{
