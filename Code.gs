@@ -498,20 +498,94 @@ function buildHeaderObs_(payload, day, showPrevFat) {
   return `${obs.length ? `(${obs.join(', ')})` : ''} ${p ? `[${p}]` : ''}`.trim();
 }
 function buildDayGridHtml_(payload, day, showDobraText) {
-  const rows = (payload.rows || []).map(r => {
-    const c = r.days[day - 1] || {};
-    let txt = [c.entrada || '-', c.intervalo || '-', c.saida || '-'].join(' / ');
-    if (c.isDobra && showDobraText) txt += ' / dobra';
-    return `<tr><td>${r.nome}</td><td>${txt}</td></tr>`;
-  }).join('');
-  return `<table><tr><th>Nome</th><th>Horários</th></tr>${rows}</table>`;
+  const dur = hhmmToMin_(payload.duracaoIntervalo);
+  const rows = payload.rows || [];
+
+  let minStart = Infinity;
+  let maxEnd = -Infinity;
+  rows.forEach(r => {
+    const c = normalizeDayCell_(r.days[day - 1] || {}, r);
+    if (isHHMMAllowOver24_(c.entrada) && isHHMMAllowOver24_(c.saida)) {
+      minStart = Math.min(minStart, hhmmToMin_(c.entrada));
+      maxEnd = Math.max(maxEnd, hhmmToMin_(c.saida));
+    }
+  });
+
+  if (!isFinite(minStart) || !isFinite(maxEnd) || minStart >= maxEnd) {
+    minStart = 8 * 60;
+    maxEnd = 18 * 60;
+  }
+
+  minStart = Math.floor(minStart / 30) * 30;
+  maxEnd = Math.ceil(maxEnd / 30) * 30;
+
+  const slots = [];
+  for (let t = minStart; t < maxEnd; t += 30) slots.push(t);
+
+  const head = slots.map(t => `<th class="slot-head">${minToHHMM_(t)}</th>`).join('');
+  let html = `<table class="grid30"><tr><th>Nome</th>${head}<th>Extra/Total</th></tr>`;
+
+  rows.forEach(r => {
+    const raw = r.days[day - 1] || {};
+    const c = normalizeDayCell_(raw, r);
+    const isSpecial = c.isSpecialDay;
+    const isFreela = !!r.isFreelancer;
+    const en = isHHMMAllowOver24_(c.entrada) ? hhmmToMin_(c.entrada) : NaN;
+    const it = isHHMMAllowOver24_(c.intervalo) ? hhmmToMin_(c.intervalo) : NaN;
+    const ex = isHHMMAllowOver24_(c.saida) ? hhmmToMin_(c.saida) : NaN;
+    const jornada = hhmmToMin_(r.jornada || '00:00');
+
+    let extraText = '-';
+    if (!isNaN(en) && !isNaN(ex)) {
+      if (isFreela) {
+        extraText = minToHHMM_(Math.max(0, ex - en - dur));
+      } else {
+        let extra = ex - en - dur - jornada;
+        if (raw.isDobra) extra = 0;
+        if (['Folga', 'Férias', 'Licença', 'Dom. mês'].includes(c.entrada)) extra = 0;
+        if (c.entrada === 'Abatimento') extra = -jornada;
+        extraText = minToHHMM_(extra);
+      }
+    }
+
+    html += `<tr><td>${r.nome}</td>`;
+    slots.forEach(t => {
+      let cls = '';
+      let txt = '';
+      if (isSpecial) {
+        cls = 'st-status';
+        txt = c.entrada;
+      } else if (!isNaN(en) && !isNaN(ex) && t >= en && t < ex) {
+        cls = isFreela ? 'st-freela' : 'st-work';
+        if (!isNaN(it) && t >= it && t < (it + dur)) cls = 'st-break';
+        if (raw.isDobra && showDobraText) txt = 'dobra';
+      }
+      html += `<td class="slot ${cls}">${txt}</td>`;
+    });
+    html += `<td>${extraText}</td></tr>`;
+  });
+
+  html += '</table>';
+  return html;
 }
 function pdfCss_() {
-  return `body{font-family:Arial,sans-serif;font-size:10px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #bbb;padding:4px}.day-block,.week-block{break-inside:avoid;page-break-inside:avoid}.first{page-break-after:always}.week-block + .week-block{page-break-before:always}`;
+  return `body{font-family:Arial,sans-serif;font-size:10px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #bbb;padding:4px}.first{page-break-after:always}.day-block{page-break-before:always;break-inside:avoid;page-break-inside:avoid}.day-block:first-of-type{page-break-before:auto}.week-block{break-inside:avoid;page-break-inside:avoid}.week-block + .week-block{page-break-before:always}.grid30 th,.grid30 td{font-size:8px;padding:2px}.grid30 .slot-head{background:#f6e9d6}.grid30 .slot{min-width:20px;width:20px;text-align:center}.grid30 .st-work{background:#dff2d8}.grid30 .st-break{background:#dbeafe}.grid30 .st-freela{background:#fff3bf}.grid30 .st-status{background:#ffe0e0}`;
 }
 
 function getWeatherForMonth(ano, mes) {
   return getWeatherForTiradentes_(Number(ano), Number(mes));
+}
+
+function fetchJsonWithLog_(url) {
+  try {
+    const resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+    const text = resp.getContentText() || "";
+    try { return JSON.parse(text || "{}"); }
+    catch (e) { Logger.log("Weather JSON inválido: " + url + " / trecho: " + text.substring(0, 300)); return {}; }
+  } catch (e) {
+    Logger.log("Weather fetch falhou: " + url + " / erro: " + (e && e.message ? e.message : e));
+    return {};
+  }
 }
 
 function getWeatherForTiradentes_(ano, mes) {
@@ -521,7 +595,7 @@ function getWeatherForTiradentes_(ano, mes) {
     const cached = cache.get(key);
     if (cached) return JSON.parse(cached);
 
-    const geo = JSON.parse(UrlFetchApp.fetch('https://geocoding-api.open-meteo.com/v1/search?name=Tiradentes&count=1&language=pt&format=json', { muteHttpExceptions: true }).getContentText() || '{}');
+    const geo = fetchJsonWithLog_('https://geocoding-api.open-meteo.com/v1/search?name=Tiradentes&count=1&language=pt&format=json');
     const item = (geo.results || [])[0];
     if (!item) return {};
 
@@ -545,13 +619,13 @@ function getWeatherForTiradentes_(ano, mes) {
     const fetchArchive = (sDate, eDate) => {
       if (sDate > eDate) return;
       const url = `https://archive-api.open-meteo.com/v1/archive?latitude=${item.latitude}&longitude=${item.longitude}&daily=temperature_2m_min,temperature_2m_max,precipitation_probability_max&timezone=America%2FSao_Paulo&start_date=${fmt(sDate)}&end_date=${fmt(eDate)}`;
-      const data = JSON.parse(UrlFetchApp.fetch(url, { muteHttpExceptions: true }).getContentText() || '{}');
+      const data = fetchJsonWithLog_(url);
       addDaily(data.daily || {});
     };
     const fetchForecast = (sDate, eDate) => {
       if (sDate > eDate) return;
       const url = `https://api.open-meteo.com/v1/forecast?latitude=${item.latitude}&longitude=${item.longitude}&daily=temperature_2m_min,temperature_2m_max,precipitation_probability_max&timezone=America%2FSao_Paulo&start_date=${fmt(sDate)}&end_date=${fmt(eDate)}`;
-      const data = JSON.parse(UrlFetchApp.fetch(url, { muteHttpExceptions: true }).getContentText() || '{}');
+      const data = fetchJsonWithLog_(url);
       addDaily(data.daily || {});
     };
 
