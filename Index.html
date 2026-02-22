@@ -30,10 +30,15 @@
     .hidden{display:none}
     .err-tip{position:fixed;z-index:10000;max-width:260px;background:#fff;border:1px solid #e0d6b8;border-radius:10px;padding:8px 10px;box-shadow:0 8px 24px rgba(0,0,0,.12);font-size:12px}
     .err-tip.hidden{display:none}
-    .sticky-head{position:sticky;top:0;z-index:5}
-    .sticky-head-2{position:sticky;top:36px;z-index:5;background:#fcf4e8}
-    .sticky-col{position:sticky;left:0;z-index:4;background:#fff}
+    .sticky-head{position:sticky;top:0;z-index:20}
+    .sticky-head-2{position:sticky;top:36px;z-index:19;background:#fcf4e8}
+    .sticky-col{position:sticky;z-index:12;background:#fcf4e8}
     .sticky-col-1{left:0}
+    .sticky-col-2{left:260px}
+    .sticky-col-3{left:440px}
+    .sticky-col-4{left:550px}
+    td.sticky-col{background:#fcf4e8}
+    td.sticky-col input{background:#fff}
     .status{border-left:3px solid transparent}
     .status-Folga{background:#f4f9ff;border-left-color:#8ab8e8}
     .status-Dom{background:#fff6f6;border-left-color:#eb9a9a}
@@ -244,6 +249,12 @@ function validateAllClient(){
     let cons=0, domMes=false;
     r.days.forEach((raw,di)=>{
       raw.entrada=normalizeStatusOrTime(raw.entrada); raw.intervalo=normalizeStatusOrTime(raw.intervalo); raw.saida=normalizeStatusOrTime(raw.saida);
+      if (r.escala==='12x36') {
+        const v12 = raw.entrada;
+        if (v12==='Dom. mês' || v12==='Abatimento') {
+          setError(ri, di, 'entrada', "Escala 12x36 não permite 'Dom. mês' nem 'Abatimento'.");
+        }
+      }
       if(isTime(raw.entrada)&&isTime(raw.intervalo)&&toMin(raw.intervalo)<toMin(raw.entrada)) raw.intervalo=fromMin(toMin(raw.intervalo)+1440);
       if(isTime(raw.entrada)&&isTime(raw.saida)&&toMin(raw.saida)<toMin(raw.entrada)) raw.saida=fromMin(toMin(raw.saida)+1440);
 
@@ -259,7 +270,7 @@ function validateAllClient(){
       if(r.isFreelancer) return;
       if(allSpecial){
         if(raw.entrada==='Dom. mês' && new Date(Number(v('ano')),Number(v('mes'))-1,di+1).getDay()===0) domMes=true;
-        cons=0; setError(ri,di,'entrada',"Escala 12x36 não permite 'Dom. mês' nem 'Abatimento'."); return;
+        cons=0; return;
       }
       if(isTime(raw.entrada)&&isTime(raw.intervalo)&&isTime(raw.saida)){
         const en=toMin(raw.entrada),it=toMin(raw.intervalo),ex=toMin(raw.saida),jor=toMin(r.jornada||'00:00');
@@ -275,9 +286,9 @@ function validateAllClient(){
 
 function rowIndicators(r,ri){const e=countRowErrors(ri); const domOk=r.isFreelancer||r.escala==='12x36'||r.days.some((c,i)=>c.entrada==='Dom. mês'&&new Date(Number(v('ano')),Number(v('mes'))-1,i+1).getDay()===0); return `<span class="chip">Dom mês: ${domOk?'OK':'Falta'}</span><span class="chip">Erros: ${e}</span>`}
 function statusClass(s){if(s==='Dom. mês') return 'status status-Dom'; if(s==='Licença') return 'status status-Licenca'; if(s==='Férias') return 'status status-Ferias'; if(s==='Folga'||s==='Abatimento') return `status status-${s}`; return ''}
-function cellClass(ri,di,field,c){let cls=statusClass(c.entrada); if(c.isDobra) cls+=' is-dobra'; if(getError(ri,di,field)) cls+=' cell-error'; return cls.trim()}
+function cellClass(ri,di,field,c){let cls=''; if(specialStatuses.includes(c.entrada)) cls=statusClass(c.entrada); if(c.isDobra) cls+=' is-dobra'; if(getError(ri,di,field)) cls+=' cell-error'; return cls.trim()}
 
-function headerObs(day){const k=dateKey(day),f=model.feriados[k]||[],e=model.eventos[k]||[],p=model.prevFat[k],w=model.weather[k],clima=w?`${w.min??'—'}°/${w.max??'—'}° ${w.rain??'—'}%`:'—'; return `${[...f,...e].join(', ')} ${p?`[${p}]`:''} | ${clima}`.trim()}
+function headerObs(day){const k=dateKey(day),f=model.feriados[k]||[],e=model.eventos[k]||[],p=model.prevFat[k],w=model.weather[k],clima=w?`${w.min??'—'}°/${w.max??'—'}° ${w.rain??'—'}%`:'—'; const info=`<span title="Dados de clima via Open-Meteo (previsão/arquivo). Pode haver dias sem dados (—), especialmente em meses futuros.">ⓘ</span>`; return `${[...f,...e].join(', ')} ${p?`[${p}]`:''} | ${clima} ${info}`.trim()}
 function colabEditor(ri,r){const arr=(bootstrap.colaboradores||[]).filter(c=>c.empresa===model.empresa).map(c=>c.nome); return `<input list='colab_${ri}' value='${r.nome||''}' onchange='setColab(${ri},this.value)' style='width:180px'><datalist id='colab_${ri}'>${arr.map(n=>`<option value='${n}'></option>`).join('')}</datalist><br><button class='chip' onclick='toggleFreela(${ri})'>${r.isFreelancer?'Voltar':'Freelancer'}</button>`}
 function funcEditor(ri,r){if(!r.isFreelancer) return r.funcao||''; const fun=(bootstrap.funcoes||[]).filter(f=>f.empresasTokens.includes(model.empresa)).map(f=>f.nome); return `<input list='func_${ri}' value='${r.funcao||''}' onchange='model.rows[${ri}].funcao=this.value'><datalist id='func_${ri}'>${fun.map(n=>`<option value='${n}'></option>`).join('')}</datalist>`}
 
@@ -305,16 +316,16 @@ function onPasteCell(ev,ri,di,field){
 
 function renderTable(){
   const mes=Number(v('mes')),ano=Number(v('ano')); if(!mes||!ano||!model.empresa){tableWrapEl.innerHTML=''; return}
-  let h='<table><tr>';
-  h+='<th class="sticky-head sticky-col sticky-col-1">Linha</th><th class="sticky-head">Função</th><th class="sticky-head">Escala</th><th class="sticky-head">Jornada</th>';
+  let h='<table><colgroup><col style="width:260px"><col style="width:180px"><col style="width:110px"><col style="width:110px"></colgroup><tr>';
+  h+='<th class="sticky-head sticky-col sticky-col-1">Linha</th><th class="sticky-head sticky-col sticky-col-2">Função</th><th class="sticky-head sticky-col sticky-col-3">Escala</th><th class="sticky-head sticky-col sticky-col-4">Jornada</th>';
   for(let d=1;d<=daysInMonth();d++) h+=`<th class='sticky-head' colspan='4'>${dateLabel(d)}<br><span class='small'>${headerObs(d)}</span></th>`;
   h+='<th class="sticky-head">Resumo</th></tr><tr>';
-  h+='<th class="sticky-head-2 sticky-col sticky-col-1"></th><th class="sticky-head-2"></th><th class="sticky-head-2"></th><th class="sticky-head-2"></th>';
+  h+='<th class="sticky-head-2 sticky-col sticky-col-1"></th><th class="sticky-head-2 sticky-col sticky-col-2"></th><th class="sticky-head-2 sticky-col sticky-col-3"></th><th class="sticky-head-2 sticky-col sticky-col-4"></th>';
   for(let d=1;d<=daysInMonth();d++) h+="<th class='sticky-head-2'>Entrada</th><th class='sticky-head-2'>Intervalo</th><th class='sticky-head-2'>Saída</th><th class='sticky-head-2'>Exceções</th>";
   h+='<th class="sticky-head-2"></th></tr>';
 
   model.rows.forEach((r,ri)=>{
-    h+=`<tr><td class='sticky-col sticky-col-1'><button class='chip' onclick='removeRowAt(${ri})'>🗑</button><br>${colabEditor(ri,r)}</td><td>${funcEditor(ri,r)}</td><td>${r.escala||''}</td><td>${r.jornada||''}</td>`;
+    h+=`<tr><td class='sticky-col sticky-col-1'><button class='chip' onclick='removeRowAt(${ri})'>🗑</button><br>${colabEditor(ri,r)}</td><td class='sticky-col sticky-col-2'>${funcEditor(ri,r)}</td><td class='sticky-col sticky-col-3'>${r.escala||''}</td><td class='sticky-col sticky-col-4'>${r.jornada||''}</td>`;
     r.days.forEach((c,di)=>{
       ['entrada','intervalo','saida'].forEach(f=>{
         const err=getError(ri,di,f),cls=cellClass(ri,di,f,c),t=err?` data-err="${escapeAttr(err)}" title="${escapeAttr(err)}"`:'';
