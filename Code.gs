@@ -505,29 +505,56 @@ function transformCellForColabPdf_(row, cell, payload) {
   c.entrada = norm.entrada;
   c.intervalo = norm.intervalo;
   c.saida = norm.saida;
+  c.isDobra = false;
 
-  if (row.isFreelancer) {
-    c.isDobra = false;
+  if (c.exceptionEscala) {
+    c.entrada = c.intervalo = c.saida = 'Folga';
     return c;
   }
 
-  if (c.exceptionEscala) c.entrada = c.intervalo = c.saida = 'Folga';
-
-  if (c.exceptionExtra && isHHMMAllowOver24_(c.entrada) && isHHMM_(row.jornada || '')) {
-    const calc = hhmmToMin_(c.entrada) + hhmmToMin_(row.jornada) + hhmmToMin_(payload.duracaoIntervalo);
-    c.saida = minToHHMM_(calc);
+  if (row.isFreelancer) {
+    return c;
   }
 
-  if (c.exceptionMaxSemInt && isHHMMAllowOver24_(c.entrada) && isHHMM_(row.jornada || '')) {
-    const mid = hhmmToMin_(c.entrada) + Math.round((hhmmToMin_(row.jornada) / 2) / 30) * 30;
-    c.intervalo = minToHHMM_(mid);
+  if (CONFIG.SPECIAL_STATUSES.includes(c.entrada)) {
+    c.intervalo = c.entrada;
+    c.saida = c.entrada;
+    return c;
   }
 
-  if (isHHMMAllowOver24_(c.entrada) && isHHMMAllowOver24_(c.saida) && hhmmToMin_(c.saida) < hhmmToMin_(c.entrada)) {
-    c.saida = minToHHMM_(hhmmToMin_(c.saida) + 1440);
+  if (isHHMMAllowOver24_(c.entrada) && isHHMM_(row.jornada || '') && isHHMM_(payload.duracaoIntervalo || '')) {
+    const entradaMin = hhmmToMin_(c.entrada);
+    const jornadaMin = hhmmToMin_(row.jornada);
+    const durMin = hhmmToMin_(payload.duracaoIntervalo);
+    const saidaNormalMin = entradaMin + jornadaMin + durMin;
+    const saidaNormal = minToHHMM_(saidaNormalMin);
+
+    const hasException = !!(cell.exceptionExtra || cell.exceptionMaxSemInt || cell.exceptionEscala || cell.isDobra);
+
+    // Intervalo normal: mantém se válido e dentro da jornada normal; senão usa meio da jornada arredondado para 30 min.
+    let intervaloNormal = c.intervalo;
+    const intervaloValido = isHHMMAllowOver24_(intervaloNormal)
+      && hhmmToMin_(intervaloNormal) >= entradaMin
+      && hhmmToMin_(intervaloNormal) < saidaNormalMin;
+
+    if (!intervaloValido) {
+      const mid = entradaMin + Math.round((jornadaMin / 2) / 30) * 30;
+      intervaloNormal = minToHHMM_(mid);
+    }
+
+    if (hasException) {
+      c.saida = saidaNormal;
+      c.intervalo = intervaloNormal;
+    } else {
+      c.saida = isHHMMAllowOver24_(c.saida) ? c.saida : saidaNormal;
+      c.intervalo = intervaloNormal;
+    }
+
+    if (isHHMMAllowOver24_(c.entrada) && isHHMMAllowOver24_(c.saida) && hhmmToMin_(c.saida) < hhmmToMin_(c.entrada)) {
+      c.saida = minToHHMM_(hhmmToMin_(c.saida) + 1440);
+    }
   }
 
-  c.isDobra = false;
   return c;
 }
 
@@ -631,7 +658,7 @@ function buildDayGridHtml_(payload, day, showDobraText) {
   return html;
 }
 function pdfCss_() {
-  return `*{-webkit-print-color-adjust:exact;print-color-adjust:exact}body{font-family:Arial,sans-serif;font-size:10px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #bbb;padding:4px}.first{page-break-after:always}.day-block{page-break-before:always;break-inside:avoid;page-break-inside:avoid}.day-block:first-of-type{page-break-before:auto}.week-block{break-inside:avoid;page-break-inside:avoid}.week-block + .week-block{page-break-before:always}.grid30 th,.grid30 td{font-size:8px;padding:2px}.grid30 .slot-head{background:#f6e9d6}.grid30 .name-head,.grid30 .name-col{background:#f6e9d6;font-weight:700}.grid30 .slot{min-width:20px;width:20px;text-align:center}.grid30 .st-work{background:#dff2d8}.grid30 .st-break{background:#dbeafe}.grid30 .st-freela{background:#fff3bf}.grid30 .st-status{background:#ffe0e0}`;
+  return `*{-webkit-print-color-adjust:exact;print-color-adjust:exact}body{font-family:Arial,sans-serif;font-size:10px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #bbb;padding:4px}.first{page-break-after:always}.day-block{break-inside:avoid;page-break-inside:avoid;break-before:auto}.week-block{break-inside:avoid;page-break-inside:avoid}.week-block + .week-block{page-break-before:always}.grid30 th,.grid30 td{font-size:8px;padding:2px}.grid30 .slot-head{background:#f6e9d6}.grid30 .name-head,.grid30 .name-col{background:#f6e9d6;font-weight:700}.grid30 th:last-child,.grid30 td:last-child{background:#f6e9d6;font-weight:700}.grid30 .slot{min-width:20px;width:20px;text-align:center}.grid30 .st-work{background:#dff2d8}.grid30 .st-break{background:#dbeafe}.grid30 .st-freela{background:#fff3bf}.grid30 .st-status{background:#ffe0e0}`;
 }
 
 function getWeatherForMonth(ano, mes) {
