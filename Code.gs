@@ -551,6 +551,7 @@ function buildHeaderObs_(payload, day, showPrevFat) {
 }
 function buildDayGridHtml_(payload, day, showDobraText) {
   const dur = hhmmToMin_(payload.duracaoIntervalo);
+  const durSafe = (Number.isFinite(dur) && dur > 0) ? dur : 60;
   const rows = payload.rows || [];
 
   let minStart = Infinity;
@@ -572,10 +573,10 @@ function buildDayGridHtml_(payload, day, showDobraText) {
   maxEnd = Math.ceil(maxEnd / 30) * 30;
 
   const slots = [];
-  for (let t = minStart; t < maxEnd; t += 30) slots.push(t);
+  for (let t = minStart; t <= maxEnd; t += 30) slots.push(t);
 
   const head = slots.map(t => `<th class="slot-head">${minToHHMM_(t)}</th>`).join('');
-  let html = `<table class="grid30"><tr><th>Nome</th>${head}<th>Extra/Total</th></tr>`;
+  let html = `<table class="grid30"><tr><th class="name-head">Nome</th>${head}<th>Extra/Total</th></tr>`;
 
   rows.forEach(r => {
     const raw = r.days[day - 1] || {};
@@ -590,9 +591,9 @@ function buildDayGridHtml_(payload, day, showDobraText) {
     let extraText = '-';
     if (!isNaN(en) && !isNaN(ex)) {
       if (isFreela) {
-        extraText = minToHHMM_(Math.max(0, ex - en - dur));
+        extraText = minToHHMM_(Math.max(0, ex - en - durSafe));
       } else {
-        let extra = ex - en - dur - jornada;
+        let extra = ex - en - durSafe - jornada;
         if (raw.isDobra) extra = 0;
         if (['Folga', 'Férias', 'Licença', 'Dom. mês'].includes(c.entrada)) extra = 0;
         if (c.entrada === 'Abatimento') extra = -jornada;
@@ -600,18 +601,27 @@ function buildDayGridHtml_(payload, day, showDobraText) {
       }
     }
 
-    html += `<tr><td>${r.nome}</td>`;
+    html += `<tr><td class="name-col">${r.nome}</td>`;
     slots.forEach(t => {
-      let txt = "";
-      let bg = "#ffffff";
+      let txt = '';
+      let bg = '#ffffff';
+
       if (isSpecial) {
-        bg = "#ffe0e0";
+        bg = '#ffe0e0';
         txt = c.entrada;
-      } else if (!isNaN(en) && !isNaN(ex) && t >= en && t < ex) {
-        bg = isFreela ? "#fff3bf" : "#dff2d8";
-        if (!isNaN(it) && t >= it && t < (it + dur)) bg = "#dbeafe";
-        if (raw.isDobra && showDobraText) txt = "dobra";
+      } else {
+        const inWork = !isNaN(en) && !isNaN(ex) && t >= en && t <= ex;
+        const inBreak = !isNaN(it) && t >= it && t < (it + durSafe);
+
+        if (inWork) {
+          bg = isFreela ? '#fff3bf' : '#dff2d8';
+          if (raw.isDobra && showDobraText) txt = 'dobra';
+        }
+        if (inBreak) {
+          bg = '#dbeafe';
+        }
       }
+
       html += `<td class="slot" style="background-color:${bg}">${txt}</td>`;
     });
     html += `<td>${extraText}</td></tr>`;
@@ -621,7 +631,7 @@ function buildDayGridHtml_(payload, day, showDobraText) {
   return html;
 }
 function pdfCss_() {
-  return `*{-webkit-print-color-adjust:exact;print-color-adjust:exact}body{font-family:Arial,sans-serif;font-size:10px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #bbb;padding:4px}.first{page-break-after:always}.day-block{page-break-before:always;break-inside:avoid;page-break-inside:avoid}.day-block:first-of-type{page-break-before:auto}.week-block{break-inside:avoid;page-break-inside:avoid}.week-block + .week-block{page-break-before:always}.grid30 th,.grid30 td{font-size:8px;padding:2px}.grid30 .slot-head{background:#f6e9d6}.grid30 .slot{min-width:20px;width:20px;text-align:center}.grid30 .st-work{background:#dff2d8}.grid30 .st-break{background:#dbeafe}.grid30 .st-freela{background:#fff3bf}.grid30 .st-status{background:#ffe0e0}`;
+  return `*{-webkit-print-color-adjust:exact;print-color-adjust:exact}body{font-family:Arial,sans-serif;font-size:10px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #bbb;padding:4px}.first{page-break-after:always}.day-block{page-break-before:always;break-inside:avoid;page-break-inside:avoid}.day-block:first-of-type{page-break-before:auto}.week-block{break-inside:avoid;page-break-inside:avoid}.week-block + .week-block{page-break-before:always}.grid30 th,.grid30 td{font-size:8px;padding:2px}.grid30 .slot-head{background:#f6e9d6}.grid30 .name-head,.grid30 .name-col{background:#f6e9d6;font-weight:700}.grid30 .slot{min-width:20px;width:20px;text-align:center}.grid30 .st-work{background:#dff2d8}.grid30 .st-break{background:#dbeafe}.grid30 .st-freela{background:#fff3bf}.grid30 .st-status{background:#ffe0e0}`;
 }
 
 function getWeatherForMonth(ano, mes) {
