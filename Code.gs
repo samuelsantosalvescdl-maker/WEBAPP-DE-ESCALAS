@@ -243,7 +243,7 @@ function appendDobrasHistory_(ss, payload, analysis) {
     const nome = String(r[0] || '').trim();
     if (!nome || !realNames.has(nome) || !(nome in mapDobras)) return;
     const oldVal = String(r[8] || '').trim();
-    const block = `{${payload.protocol || ''},${payload.mes},${payload.ano},${toMoney_(mapDobras[nome])}}`;
+    const block = `{${payload.protocol || ''}, ${payload.mes}, ${payload.ano}, ${toMoney_(mapDobras[nome])}}`;
     const newVal = oldVal ? `${oldVal}, ${block}` : block;
     if (newVal !== oldVal) updates.push({ idx, newVal });
   });
@@ -365,36 +365,63 @@ function validateTimeOrder_(entrada, intervalo, saida, duracaoIntervalo) {
 function computeAnalysis_(payload) {
   const dur = hhmmToMin_(payload.duracaoIntervalo);
   const daysInMonth = new Date(payload.ano, payload.mes, 0).getDate();
-  const out = { totalTaxi: 0, totalRefeicao: 0, totalDobrasMes: 0, totalDobrasByPerson: {}, freelancersMinutes: 0, freelancersValue: 0, bancoHorasByPerson: {} };
+  const out = {
+    totalTaxi: 0,
+    totalRefeicao: 0,
+    totalDobrasMes: 0,
+    totalDobrasByPerson: {},
+    freelancersMinutes: 0,
+    freelancersValue: 0,
+    freelancersMinutesByPerson: {},
+    freelancersValueByPerson: {},
+    bancoHorasByPerson: {},
+    bancoHorasTotal: 0,
+    totalHorasFreelancers: '00:00',
+  };
 
   for (let d = 1; d <= daysInMonth; d++) {
     let taxiCount = 0;
     (payload.rows || []).forEach(row => {
-      const c = normalizeDayCell_(row.days[d - 1] || {}, row);
-      const e = c.entrada; const s = c.saida;
-      if (isHHMMAllowOver24_(e) && isHHMMAllowOver24_(s)) {
-        const en = hhmmToMin_(e), ex = hhmmToMin_(s);
+      const raw = row.days[d - 1] || {};
+      const c = normalizeDayCell_(raw, row);
+      const e = c.entrada;
+      const sOut = c.saida;
+
+      if (isHHMMAllowOver24_(e) && isHHMMAllowOver24_(sOut)) {
+        const en = hhmmToMin_(e);
+        const ex = hhmmToMin_(sOut);
         if (ex > 1380) taxiCount += 1;
         if (en < 900) out.totalRefeicao += 1;
         if (ex >= 1080) out.totalRefeicao += 1;
 
-        if (row.isFreelancer) out.freelancersMinutes += Math.max(0, ex - en - dur);
-        else {
+        if (row.isFreelancer) {
+          const mins = Math.max(0, ex - en - dur);
+          out.freelancersMinutes += mins;
+          out.freelancersMinutesByPerson[row.nome] = (out.freelancersMinutesByPerson[row.nome] || 0) + mins;
+        } else {
           const jornada = hhmmToMin_(row.jornada || '00:00');
           let extra = ex - en - dur - jornada;
-          if ((row.days[d - 1] || {}).isDobra || CONFIG.SPECIAL_STATUSES.includes(e) && e !== 'Abatimento') extra = 0;
+          if (raw.isDobra || (CONFIG.SPECIAL_STATUSES.includes(e) && e !== 'Abatimento')) extra = 0;
           if (e === 'Abatimento') extra = -jornada;
           out.bancoHorasByPerson[row.nome] = (out.bancoHorasByPerson[row.nome] || 0) + extra;
         }
       }
-      if ((row.days[d - 1] || {}).isDobra) {
+
+      if (raw.isDobra) {
         out.totalDobrasMes += Number(payload.valorDobra);
         if (!row.isFreelancer) out.totalDobrasByPerson[row.nome] = (out.totalDobrasByPerson[row.nome] || 0) + Number(payload.valorDobra);
       }
     });
+
     out.totalTaxi += Math.ceil(taxiCount / 4) * Number(payload.valorTaxi);
   }
+
   out.freelancersValue = (out.freelancersMinutes / 60) * Number(payload.valorHoraFreelancer);
+  Object.keys(out.freelancersMinutesByPerson).forEach(n => {
+    out.freelancersValueByPerson[n] = (out.freelancersMinutesByPerson[n] / 60) * Number(payload.valorHoraFreelancer);
+  });
+  out.bancoHorasTotal = Object.values(out.bancoHorasByPerson).reduce((a, b) => a + b, 0);
+  out.totalHorasFreelancers = minToHHMM_(out.freelancersMinutes);
   return out;
 }
 
@@ -417,18 +444,35 @@ function buildAnaliseHtml_(payload, analysis, opts) {
     blocks += `<section class="day-block"><h3>${formatDateFullPt_(payload.ano, payload.mes, d)} ${buildHeaderObs_(payload, d, opts.showPrevFat)}</h3>${buildDayGridHtml_(payload, d, opts.showDobraText)}</section>`;
   }
 
+  const dobraRows = Object.entries(analysis.totalDobrasByPerson || {}).filter(([,v]) => v > 0);
+  const bancoRows = Object.entries(analysis.bancoHorasByPerson || {});
+  const freeRows = Object.entries(analysis.freelancersMinutesByPerson || {});
+
+  const dobraTable = dobraRows.length
+    ? dobraRows.map(([n,v]) => `<tr><td>${n}</td><td>${toMoney_(v)}</td></tr>`).join('')
+    : '<tr><td colspan="2">Sem dados</td></tr>';
+
+  const bancoTable = bancoRows.length
+    ? bancoRows.map(([n,v]) => `<tr><td>${n}</td><td>${minToHHMM_(v)}</td></tr>`).join('')
+    : '<tr><td colspan="2">Sem dados</td></tr>';
+
+  const freeTable = freeRows.length
+    ? freeRows.map(([n,m]) => `<tr><td>${n}</td><td>${minToHHMM_(m)}</td><td>${toMoney_(analysis.freelancersValueByPerson[n] || 0)}</td></tr>`).join('')
+    : '<tr><td colspan="3">Sem dados</td></tr>';
+
   return `<html><head><meta charset="utf-8"/><style>${pdfCss_()}</style></head><body>
   <section class="first">
     <h1>Análise de Escala - ${payload.empresa}</h1>
-    ${buildHeaderFieldsHtml_(payload)}
-    <ul>
-      <li>Taxi total: ${toMoney_(analysis.totalTaxi)}</li>
-      <li>Refeição total: ${toMoney_(analysis.totalRefeicao * Number(payload.valorRefeicao))} (${analysis.totalRefeicao} refeições)</li>
-      <li>Dobras total: ${toMoney_(analysis.totalDobrasMes)}</li>
-      <li>Freelancers: ${minToHHMM_(analysis.freelancersMinutes)} (${toMoney_(analysis.freelancersValue)})</li>
-    </ul>
+    ${buildHeaderFieldsHtml_(payload, analysis)}
+    <h3>Dobras por colaborador</h3>
+    <table><tr><th>Nome</th><th>Valor</th></tr>${dobraTable}</table>
+    <h3>Banco de horas (não freelancers)</h3>
+    <table><tr><th>Nome</th><th>HH:MM</th></tr>${bancoTable}</table>
+    <h3>Horas por freelancer</h3>
+    <table><tr><th>Nome freelancer</th><th>HH:MM</th><th>R$</th></tr>${freeTable}</table>
   </section>${blocks}</body></html>`;
 }
+
 
 function buildWeeklyHtml_(payload, options) {
   const daysInMonth = new Date(payload.ano, payload.mes, 0).getDate();
@@ -487,10 +531,18 @@ function transformCellForColabPdf_(row, cell, payload) {
   return c;
 }
 
-function buildHeaderFieldsHtml_(payload) {
-  const f = [['Empresa', payload.empresa], ['Mês/Ano', `${payload.mes}/${payload.ano}`], ['Email análise', payload.emailAnalise], ['Valor Taxi', toMoney_(payload.valorTaxi)], ['Valor Refeição', toMoney_(payload.valorRefeicao)], ['Valor Dobra', toMoney_(payload.valorDobra)], ['Valor Hora Freelancer', toMoney_(payload.valorHoraFreelancer)], ['Intervalo', payload.duracaoIntervalo], ['Max sem intervalo', payload.maxSemIntervalo], ['Protocolo', payload.protocol || '-']];
-  return `<table>${f.map(x => `<tr><th>${x[0]}</th><td>${x[1]}</td></tr>`).join('')}</table>`;
+function buildHeaderFieldsHtml_(payload, analysis) {
+  const rows = [
+    ['Empresa', payload.empresa, 'Taxi total', toMoney_(analysis.totalTaxi)],
+    ['Mês/Ano', `${payload.mes}/${payload.ano}`, 'Refeição total', `${toMoney_(analysis.totalRefeicao * Number(payload.valorRefeicao))} (${analysis.totalRefeicao} refeições)`],
+    ['Email análise', payload.emailAnalise, 'Dobras total', toMoney_(analysis.totalDobrasMes)],
+    ['Intervalo', payload.duracaoIntervalo, 'Freelancers total', `${analysis.totalHorasFreelancers} (${toMoney_(analysis.freelancersValue)})`],
+    ['Max sem intervalo', payload.maxSemIntervalo, 'Banco de horas total', minToHHMM_(analysis.bancoHorasTotal)],
+    ['Protocolo', payload.protocol || '-', '', ''],
+  ];
+  return `<table>${rows.map(r => `<tr><th>${r[0]}</th><td>${r[1]}</td><th>${r[2]}</th><td>${r[3]}</td></tr>`).join('')}</table>`;
 }
+
 function buildHeaderObs_(payload, day, showPrevFat) {
   const k = dateKey_(new Date(payload.ano, payload.mes - 1, day));
   const obs = [ ...((payload.feriados && payload.feriados[k]) || []), ...((payload.eventos && payload.eventos[k]) || []) ];
@@ -550,17 +602,17 @@ function buildDayGridHtml_(payload, day, showDobraText) {
 
     html += `<tr><td>${r.nome}</td>`;
     slots.forEach(t => {
-      let cls = '';
-      let txt = '';
+      let txt = "";
+      let bg = "#ffffff";
       if (isSpecial) {
-        cls = 'st-status';
+        bg = "#ffe0e0";
         txt = c.entrada;
       } else if (!isNaN(en) && !isNaN(ex) && t >= en && t < ex) {
-        cls = isFreela ? 'st-freela' : 'st-work';
-        if (!isNaN(it) && t >= it && t < (it + dur)) cls = 'st-break';
-        if (raw.isDobra && showDobraText) txt = 'dobra';
+        bg = isFreela ? "#fff3bf" : "#dff2d8";
+        if (!isNaN(it) && t >= it && t < (it + dur)) bg = "#dbeafe";
+        if (raw.isDobra && showDobraText) txt = "dobra";
       }
-      html += `<td class="slot ${cls}">${txt}</td>`;
+      html += `<td class="slot" style="background-color:${bg}">${txt}</td>`;
     });
     html += `<td>${extraText}</td></tr>`;
   });
@@ -569,7 +621,7 @@ function buildDayGridHtml_(payload, day, showDobraText) {
   return html;
 }
 function pdfCss_() {
-  return `body{font-family:Arial,sans-serif;font-size:10px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #bbb;padding:4px}.first{page-break-after:always}.day-block{page-break-before:always;break-inside:avoid;page-break-inside:avoid}.day-block:first-of-type{page-break-before:auto}.week-block{break-inside:avoid;page-break-inside:avoid}.week-block + .week-block{page-break-before:always}.grid30 th,.grid30 td{font-size:8px;padding:2px}.grid30 .slot-head{background:#f6e9d6}.grid30 .slot{min-width:20px;width:20px;text-align:center}.grid30 .st-work{background:#dff2d8}.grid30 .st-break{background:#dbeafe}.grid30 .st-freela{background:#fff3bf}.grid30 .st-status{background:#ffe0e0}`;
+  return `*{-webkit-print-color-adjust:exact;print-color-adjust:exact}body{font-family:Arial,sans-serif;font-size:10px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #bbb;padding:4px}.first{page-break-after:always}.day-block{page-break-before:always;break-inside:avoid;page-break-inside:avoid}.day-block:first-of-type{page-break-before:auto}.week-block{break-inside:avoid;page-break-inside:avoid}.week-block + .week-block{page-break-before:always}.grid30 th,.grid30 td{font-size:8px;padding:2px}.grid30 .slot-head{background:#f6e9d6}.grid30 .slot{min-width:20px;width:20px;text-align:center}.grid30 .st-work{background:#dff2d8}.grid30 .st-break{background:#dbeafe}.grid30 .st-freela{background:#fff3bf}.grid30 .st-status{background:#ffe0e0}`;
 }
 
 function getWeatherForMonth(ano, mes) {

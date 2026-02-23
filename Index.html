@@ -30,14 +30,15 @@
     .hidden{display:none}
     .err-tip{position:fixed;z-index:10000;max-width:260px;background:#fff;border:1px solid #e0d6b8;border-radius:10px;padding:8px 10px;box-shadow:0 8px 24px rgba(0,0,0,.12);font-size:12px}
     .err-tip.hidden{display:none}
-    .sticky-head{position:sticky;top:0;z-index:20}
-    .sticky-head-2{position:sticky;top:36px;z-index:19;background:#fcf4e8}
-    .sticky-col{position:sticky;z-index:12;background:#fcf4e8}
-    .sticky-col-1{left:0}
-    .sticky-col-2{left:260px}
-    .sticky-col-3{left:440px}
-    .sticky-col-4{left:550px}
-    td.sticky-col{background:#fcf4e8}
+    .sticky-head{position:sticky;top:0;z-index:50}
+    .sticky-head-2{position:sticky;top:36px;z-index:45;background:#fcf4e8}
+    .sticky-col{position:sticky;background:#fcf4e8}
+    .sticky-col-1{left:var(--sticky-left-1,0px)}
+    .sticky-col-2{left:var(--sticky-left-2,260px)}
+    .sticky-col-3{left:var(--sticky-left-3,440px)}
+    .sticky-col-4{left:var(--sticky-left-4,550px)}
+    td.sticky-col{z-index:40;background:#fcf4e8}
+    th.sticky-col{z-index:55}
     td.sticky-col input{background:#fff}
     .status{border-left:3px solid transparent}
     .status-Folga{background:#f4f9ff;border-left-color:#8ab8e8}
@@ -314,6 +315,26 @@ function onPasteCell(ev,ri,di,field){
   validateAllClient(); renderTable();
 }
 
+
+function debounce(fn, wait){ let t=null; return (...args)=>{ clearTimeout(t); t=setTimeout(()=>fn(...args), wait); }; }
+function applyStickyOffsets(){
+  const table = tableWrapEl.querySelector('table');
+  if(!table) return;
+  const headRow = table.querySelector('tr');
+  if(!headRow) return;
+  const ths = Array.from(headRow.children).slice(0,4);
+  if(ths.length < 4) return;
+  const w1 = ths[0].offsetWidth;
+  const w2 = ths[1].offsetWidth;
+  const w3 = ths[2].offsetWidth;
+  table.style.setProperty('--sticky-left-1','0px');
+  table.style.setProperty('--sticky-left-2', w1 + 'px');
+  table.style.setProperty('--sticky-left-3', (w1+w2) + 'px');
+  table.style.setProperty('--sticky-left-4', (w1+w2+w3) + 'px');
+}
+const applyStickyOffsetsDebounced = debounce(applyStickyOffsets, 80);
+window.addEventListener('resize', applyStickyOffsetsDebounced);
+
 function renderTable(){
   const mes=Number(v('mes')),ano=Number(v('ano')); if(!mes||!ano||!model.empresa){tableWrapEl.innerHTML=''; return}
   let h='<table><colgroup><col style="width:260px"><col style="width:180px"><col style="width:110px"><col style="width:110px"></colgroup><tr>';
@@ -338,6 +359,7 @@ function renderTable(){
 
   h+=`</table><datalist id='statusList'>${specialStatuses.map(s=>`<option value='${s}'></option>`).join('')}</datalist>`;
   tableWrapEl.innerHTML=h;
+  applyStickyOffsets();
 }
 
 function asyncApplyLoadedPayload(p){
