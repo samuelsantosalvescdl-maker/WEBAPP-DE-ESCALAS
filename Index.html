@@ -123,7 +123,7 @@ function showPdfModal(title,url,extraMsg){
 function closeModal(){ modalOverlayEl.classList.add('hidden'); }
 function showErrTip(e,msg){
   if(!msg) return;
-  errTipEl.innerHTML = escapeAttr(msg);
+  errTipEl.innerText = String(msg||'');
   errTipEl.classList.remove('hidden');
   tipOpen = true;
   moveErrTip(e);
@@ -192,7 +192,7 @@ function onEmpresaChange(){
   }).withFailureHandler(e=>{ setLoading(false); alert(e.message||e); }).setAnoAqui(Number(anoEl.value));
 }
 
-function createEmptyDay(){return {entrada:'',intervalo:'',saida:'',exceptionMaxSemInt:false,exceptionExtra:false,exceptionEscala:false,isDobra:false}}
+function createEmptyDay(){return {entrada:'',intervalo:'',saida:'',exceptionMaxSemInt:false,exceptionExtra:false,exceptionEscala:false,exceptionRest11:false,isDobra:false}}
 function addRow(render=true){ if(!model.empresa) return; if(model.rows.length>=100) return; const d=(Number(v('mes'))&&Number(v('ano')))?daysInMonth():31; model.rows.push({nome:'',funcao:'',escala:'',jornada:'',isFreelancer:false,days:Array.from({length:d},createEmptyDay)}); if(render){validateAllClient(); renderTable();}}
 function removeRow(){ if(model.rows.length<=2) return; model.rows.pop(); validateAllClient(); renderTable();}
 function removeRowAt(ri){ if(model.rows.length<=2) return; model.rows.splice(ri,1); validateAllClient(); renderTable(); }
@@ -209,10 +209,68 @@ function toMin(t){const m=String(t||'').match(/^(\d{1,3}):(\d{2})$/); if(!m) ret
 function fromMin(x){const h=Math.floor(x/60),m=x%60; return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`}
 function isTime(t){return /^\d{1,3}:\d{2}$/.test(t) && !Number.isNaN(toMin(t));}
 function applyWrap(entrada,val){ if(isTime(entrada)&&isTime(val)&&toMin(val)<toMin(entrada)) return fromMin(toMin(val)+1440); return val; }
+function isSpecialEntry(v){ return specialStatuses.includes(v); }
+function normalizeTimeTripleForWrap_(d){
+  if(isTime(d.entrada) && isTime(d.intervalo) && toMin(d.intervalo)<toMin(d.entrada)) d.intervalo = fromMin(toMin(d.intervalo)+1440);
+  if(isTime(d.entrada) && isTime(d.saida) && toMin(d.saida)<toMin(d.entrada)) d.saida = fromMin(toMin(d.saida)+1440);
+}
+function isLockedSpecial(d){ return ['Férias','Licença','Abatimento','Dom. mês'].includes(d.entrada); }
+
+function recompute12x36Row(ri){
+  const r = model.rows[ri];
+  if(!r || r.isFreelancer || r.escala!=='12x36') return;
+
+  const days = r.days || [];
+  let anchorIndex = -1;
+  let anchorType = '';
+  for(let i=0;i<days.length;i++){
+    const e = normalizeStatusOrTime(days[i].entrada||'');
+    if(e==='Folga'){ anchorIndex=i; anchorType='REST'; break; }
+    if(isTime(e)){ anchorIndex=i; anchorType='WORK'; break; }
+  }
+  if(anchorIndex<0) return;
+
+  let template = null;
+  for(let i=0;i<days.length;i++){
+    const d=days[i];
+    if(isLockedSpecial(d) || d.entrada==='Folga') continue;
+    if(isTime(d.entrada) && isTime(d.intervalo) && isTime(d.saida)){
+      template = {entrada:d.entrada, intervalo:d.intervalo, saida:d.saida};
+      break;
+    }
+  }
+
+  for(let j=0;j<days.length;j++){
+    const d = days[j];
+    d.entrada = normalizeStatusOrTime(d.entrada||'');
+    d.intervalo = normalizeStatusOrTime(d.intervalo||'');
+    d.saida = normalizeStatusOrTime(d.saida||'');
+
+    if(isLockedSpecial(d)) continue;
+
+    const isSameParity = ((j-anchorIndex)%2===0);
+    const isRestDay = anchorType==='REST' ? isSameParity : !isSameParity;
+
+    if(isRestDay){
+      if(!isLockedSpecial(d)){ d.entrada='Folga'; d.intervalo='Folga'; d.saida='Folga'; }
+    } else {
+      if(template){
+        d.entrada = template.entrada;
+        d.intervalo = template.intervalo;
+        d.saida = template.saida;
+        normalizeTimeTripleForWrap_(d);
+      } else {
+        if(j!==anchorIndex || anchorType!=='WORK'){ d.entrada=''; d.intervalo=''; d.saida=''; }
+      }
+    }
+  }
+}
+
 
 function setColab(ri,val){
   const c=(bootstrap.colaboradores||[]).find(x=>x.nome===val && x.empresa===model.empresa); if(!c) return;
   Object.assign(model.rows[ri],{isFreelancer:false,nome:c.nome,funcao:c.funcao,escala:c.escala,jornada:c.jornada});
+  recompute12x36Row(ri);
   validateAllClient(); renderTable();
 }
 function toggleFreela(ri){
@@ -221,20 +279,26 @@ function toggleFreela(ri){
   else Object.assign(r,{isFreelancer:false,nome:'',funcao:'',escala:'',jornada:''});
   validateAllClient(); renderTable();
 }
-function toggleExc(ri,di,key){model.rows[ri].days[di][key]=!model.rows[ri].days[di][key]; validateAllClient(); renderTable();}
+function toggleExc(ri,di,key){model.rows[ri].days[di][key]=!model.rows[ri].days[di][key]; recompute12x36Row(ri); validateAllClient(); renderTable();}
 
 function setCell(ri,di,key,val){
   const r=model.rows[ri],c=r.days[di];
   val=normalizeStatusOrTime(val);
-  if(key==='entrada' && !val){c.entrada=''; c.intervalo=''; c.saida=''; validateAllClient(); renderTable(); return;}
+  if(key==='entrada' && !val){c.entrada=''; c.intervalo=''; c.saida=''; recompute12x36Row(ri); validateAllClient(); renderTable(); return;}
   if(key==='entrada' && specialStatuses.includes(val)){
     if(r.escala==='12x36' && ['Dom. mês','Abatimento'].includes(val)){ setError(ri,di,'entrada',"Escala 12x36 não permite 'Dom. mês' nem 'Abatimento'."); validateAllClient(); renderTable(); return; }
-    c.entrada=c.intervalo=c.saida=val; validateAllClient(); renderTable(); return;
+    c.entrada=c.intervalo=c.saida=val; recompute12x36Row(ri); validateAllClient(); renderTable(); return;
   }
   c[key]=val;
   if(key!=='entrada') c[key]=applyWrap(c.entrada,c[key]);
-  if(key==='entrada' && isTime(val) && !r.isFreelancer && isTime(r.jornada) && isTime(v('duracaoIntervalo'))) c.saida=fromMin(toMin(val)+toMin(r.jornada)+toMin(v('duracaoIntervalo')));
+  if(key==='entrada' && isTime(val) && !r.isFreelancer && isTime(r.jornada)){
+    const base = toMin(val) + toMin(r.jornada);
+    if(r.escala==='12x36') c.saida = fromMin(base);
+    else if(isTime(v('duracaoIntervalo'))) c.saida = fromMin(base + toMin(v('duracaoIntervalo')));
+    else c.saida = fromMin(base);
+  }
   if(key==='intervalo'||key==='saida') c[key]=applyWrap(c.entrada,c[key]);
+  recompute12x36Row(ri);
   validateAllClient(); renderTable();
 }
 
@@ -252,9 +316,7 @@ function validateAllClient(){
       raw.entrada=normalizeStatusOrTime(raw.entrada); raw.intervalo=normalizeStatusOrTime(raw.intervalo); raw.saida=normalizeStatusOrTime(raw.saida);
       if (r.escala==='12x36') {
         const v12 = raw.entrada;
-        if (v12==='Dom. mês' || v12==='Abatimento') {
-          setError(ri, di, 'entrada', "Escala 12x36 não permite 'Dom. mês' nem 'Abatimento'.");
-        }
+        if (v12==='Dom. mês' || v12==='Abatimento') setError(ri, di, 'entrada', "Escala 12x36 não permite 'Dom. mês' nem 'Abatimento'.");
       }
       if(isTime(raw.entrada)&&isTime(raw.intervalo)&&toMin(raw.intervalo)<toMin(raw.entrada)) raw.intervalo=fromMin(toMin(raw.intervalo)+1440);
       if(isTime(raw.entrada)&&isTime(raw.saida)&&toMin(raw.saida)<toMin(raw.entrada)) raw.saida=fromMin(toMin(raw.saida)+1440);
@@ -275,12 +337,29 @@ function validateAllClient(){
       }
       if(isTime(raw.entrada)&&isTime(raw.intervalo)&&isTime(raw.saida)){
         const en=toMin(raw.entrada),it=toMin(raw.intervalo),ex=toMin(raw.saida),jor=toMin(r.jornada||'00:00');
-        if(!raw.exceptionMaxSemInt && !raw.isDobra && ((it-en)>maxSem || (ex-(it+dur))>maxSem)) setError(ri,di,'entrada',"Excedeu o máximo sem descanso (Tempo máx sem intervalo). Marque 'Descanso int.' se for exceção.");
-        if(!raw.exceptionExtra && !raw.isDobra && (ex-en-dur)>jor+120) setError(ri,di,'saida',"Excedeu Jornada + 02:00. Marque '+02:00' ou 'Dobra' se for exceção.");
+        if(r.escala!=='12x36'){
+          if(!raw.exceptionMaxSemInt && !raw.isDobra && ((it-en)>maxSem || (ex-(it+dur))>maxSem)) setError(ri,di,'entrada',"Excedeu o máximo sem descanso (Tempo máx sem intervalo). Marque 'Descanso int.' se for exceção.");
+          if(!raw.exceptionExtra && !raw.isDobra && (ex-en-dur)>jor+120) setError(ri,di,'saida',"Excedeu Jornada + 02:00. Marque '+02:00' ou 'Dobra' se for exceção.");
+        }
         cons++; const lim={'6x1':6,'5x2':5,'4x3':4,'12x36':1}[r.escala]||99;
         if(cons>lim && !raw.exceptionEscala) setError(ri,di,'entrada',"Violação de escala (dias consecutivos). Marque 'Escala sem.' se for exceção.");
       } else if(['Folga','Dom. mês','Férias','Licença'].includes(raw.entrada)) cons=0;
     });
+
+    // Regra 11h entre jornadas (não freelancer, todos regimes)
+    if(!r.isFreelancer){
+      for(let di=0; di<r.days.length-1; di++){
+        const d1=r.days[di], d2=r.days[di+1];
+        const sp1=specialStatuses.includes(d1.entrada), sp2=specialStatuses.includes(d2.entrada);
+        if(sp1 || sp2) continue;
+        if(!(isTime(d1.saida) && isTime(d2.entrada))) continue;
+        const endAbs = (di*1440) + toMin(d1.saida);
+        const startAbs = ((di+1)*1440) + toMin(d2.entrada);
+        const rest = startAbs - endAbs;
+        if(rest < 660 && !d2.exceptionRest11) setError(ri, di+1, 'entrada', "Descanso mínimo entre jornadas é 11:00. Ajuste a entrada ou marque a exceção ‘Descanso 11h’.");
+      }
+    }
+
     if(!r.isFreelancer && r.escala && r.escala!=='12x36' && !domMes) setError(ri,0,'entrada',"Falta pelo menos 1 'Dom. mês' em um domingo real neste mês.");
   });
 }
@@ -300,8 +379,10 @@ function onPasteCell(ev,ri,di,field){
   const grid=txt.split(/\r?\n/).filter(Boolean).map(r=>r.split('\t'));
   const fields=['entrada','intervalo','saida'];
   const startCol=di*3+fields.indexOf(field);
+  const affectedRows=new Set();
   for(let rOff=0;rOff<grid.length;rOff++){
     const tr=ri+rOff; if(tr>=model.rows.length||tr>=100) break;
+    affectedRows.add(tr);
     for(let cOff=0;cOff<grid[rOff].length;cOff++){
       const abs=startCol+cOff; const tDay=Math.floor(abs/3); const f=fields[abs%3];
       if(tDay>=model.rows[tr].days.length) continue;
@@ -312,6 +393,7 @@ function onPasteCell(ev,ri,di,field){
       if((f==='intervalo'||f==='saida')&&isTime(cell.entrada)&&isTime(cell[f])&&toMin(cell[f])<toMin(cell.entrada)) cell[f]=fromMin(toMin(cell[f])+1440);
     }
   }
+  affectedRows.forEach(rIndex=>recompute12x36Row(rIndex));
   validateAllClient(); renderTable();
 }
 
@@ -352,7 +434,8 @@ function renderTable(){
         const err=getError(ri,di,f),cls=cellClass(ri,di,f,c),t=err?` data-err="${escapeAttr(err)}" title="${escapeAttr(err)}"`:'';
         h+=`<td class='${cls}'><input${t} value='${c[f]||''}' onchange='setCell(${ri},${di},"${f}",this.value)' onpaste='onPasteCell(event,${ri},${di},"${f}")' list='statusList' style='width:76px;border-radius:7px'></td>`;
       });
-      h+=`<td><div class='exc-stack'><button class='chip' onclick='toggleExc(${ri},${di},"exceptionMaxSemInt")'>Descanso int.</button><button class='chip' onclick='toggleExc(${ri},${di},"exceptionExtra")'>+02:00</button><button class='chip' onclick='toggleExc(${ri},${di},"exceptionEscala")'>Escala sem.</button><button class='chip' onclick='toggleExc(${ri},${di},"isDobra")'>Dobra</button></div></td>`;
+      const dis12 = (r.escala==='12x36');
+      h+=`<td><div class='exc-stack'>${dis12?'':`<button class='chip' onclick='toggleExc(${ri},${di},"exceptionMaxSemInt")'>Descanso int.</button><button class='chip' onclick='toggleExc(${ri},${di},"exceptionExtra")'>+02:00</button>`}<button class='chip' onclick='toggleExc(${ri},${di},"exceptionEscala")'>Escala sem.</button><button class='chip' onclick='toggleExc(${ri},${di},"exceptionRest11")'>Descanso 11h</button><button class='chip' onclick='toggleExc(${ri},${di},"isDobra")'>Dobra</button></div></td>`;
     });
     h+=`<td>${rowIndicators(r,ri)}</td></tr>`;
   });

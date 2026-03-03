@@ -288,6 +288,9 @@ function validatePayload_(payload, opts) {
       day.entrada = n.entrada; day.intervalo = n.intervalo; day.saida = n.saida;
 
       const isSpecialDay = n.isSpecialDay;
+      if (row.escala === '12x36' && (n.entrada === 'Dom. mês' || n.entrada === 'Abatimento')) {
+        throw new Error(`Escala 12x36 não permite 'Dom. mês' nem 'Abatimento'. (${row.nome} dia ${idx + 1})`);
+      }
       if (!isSpecialDay) {
         if ([n.entrada, n.intervalo, n.saida].some(v => v && !isHHMMAllowOver24_(v))) throw new Error(`Horário inválido em ${row.nome} dia ${idx + 1}`);
         if (n.entrada && n.intervalo && n.saida) validateTimeOrder_(n.entrada, n.intervalo, n.saida, payload.duracaoIntervalo);
@@ -302,14 +305,31 @@ function validatePayload_(payload, opts) {
       const ex = hhmmToMin_(n.saida);
       const jornada = hhmmToMin_(row.jornada || '00:00');
 
-      if (!day.exceptionMaxSemInt && !day.isDobra) {
-        if ((it - en) > maxSem || (ex - (it + dur)) > maxSem) throw new Error('Excedeu máximo sem intervalo (campo 6). Use exceção “M” se necessário.');
-      }
-      if (!day.exceptionExtra && !day.isDobra) {
-        const total = ex - en - dur;
-        if (total > jornada + 120) throw new Error('Excedeu Jornada + 02:00. Use exceção “+2” ou “Dobra”.');
+      if (row.escala !== '12x36') {
+        if (!day.exceptionMaxSemInt && !day.isDobra) {
+          if ((it - en) > maxSem || (ex - (it + dur)) > maxSem) throw new Error('Excedeu máximo sem intervalo (campo 6). Use exceção “M” se necessário.');
+        }
+        if (!day.exceptionExtra && !day.isDobra) {
+          const total = ex - en - dur;
+          if (total > jornada + 120) throw new Error('Excedeu Jornada + 02:00. Use exceção “+2” ou “Dobra”.');
+        }
       }
     });
+
+    if (!row.isFreelancer) {
+      for (let i = 0; i < (row.days || []).length - 1; i++) {
+        const d1 = normalizeDayCell_(row.days[i], row);
+        const d2 = normalizeDayCell_(row.days[i + 1], row);
+        if (d1.isSpecialDay || d2.isSpecialDay) continue;
+        if (!isHHMMAllowOver24_(d1.saida) || !isHHMMAllowOver24_(d2.entrada)) continue;
+        const endAbs = (i * 1440) + hhmmToMin_(d1.saida);
+        const startAbs = ((i + 1) * 1440) + hhmmToMin_(d2.entrada);
+        const rest = startAbs - endAbs;
+        if (rest < 660 && !row.days[i + 1].exceptionRest11) {
+          throw new Error(`Descanso mínimo entre jornadas é 11:00 em ${row.nome} (dia ${i + 2}). Ajuste a entrada ou marque a exceção ‘Descanso 11h’.`);
+        }
+      }
+    }
 
     if (opts && opts.strictForSubmit && !row.isFreelancer) {
       (row.days || []).forEach((d, idx) => {
