@@ -216,53 +216,68 @@ function normalizeTimeTripleForWrap_(d){
 }
 function isLockedSpecial(d){ return ['Férias','Licença','Abatimento','Dom. mês'].includes(d.entrada); }
 
+function get12x36Anchor_(days){
+  for(let i=0;i<days.length;i++){
+    const e = normalizeStatusOrTime(days[i].entrada||'');
+    if(e==='Folga') return {anchorIndex:i, anchorType:'REST'};
+    if(isTime(e)) return {anchorIndex:i, anchorType:'WORK'};
+  }
+  return null;
+}
+
 function recompute12x36Row(ri){
   const r = model.rows[ri];
   if(!r || r.isFreelancer || r.escala!=='12x36') return;
 
   const days = r.days || [];
-  let anchorIndex = -1;
-  let anchorType = '';
-  for(let i=0;i<days.length;i++){
-    const e = normalizeStatusOrTime(days[i].entrada||'');
-    if(e==='Folga'){ anchorIndex=i; anchorType='REST'; break; }
-    if(isTime(e)){ anchorIndex=i; anchorType='WORK'; break; }
-  }
-  if(anchorIndex<0) return;
+  const anchor = get12x36Anchor_(days);
+  if(!anchor) return;
 
-  let template = null;
+  const jornadaMin = isTime(r.jornada) ? toMin(r.jornada) : NaN;
+  const calcDefaultInterval = (entrada)=>{
+    if(!isTime(entrada) || Number.isNaN(jornadaMin)) return '';
+    const mid = toMin(entrada) + Math.round((jornadaMin/2)/30)*30;
+    return fromMin(mid);
+  };
+
+  let templateEntrada = '';
+  let templateIntervalo = '';
   for(let i=0;i<days.length;i++){
     const d=days[i];
-    if(isLockedSpecial(d) || d.entrada==='Folga') continue;
-    if(isTime(d.entrada) && isTime(d.intervalo) && isTime(d.saida)){
-      template = {entrada:d.entrada, intervalo:d.intervalo, saida:d.saida};
-      break;
-    }
+    d.entrada = normalizeStatusOrTime(d.entrada||'');
+    d.intervalo = normalizeStatusOrTime(d.intervalo||'');
+    d.saida = normalizeStatusOrTime(d.saida||'');
+    if(!templateEntrada && isTime(d.entrada)) templateEntrada = d.entrada;
+    if(!templateIntervalo && isTime(d.intervalo)) templateIntervalo = d.intervalo;
   }
 
   for(let j=0;j<days.length;j++){
     const d = days[j];
-    d.entrada = normalizeStatusOrTime(d.entrada||'');
-    d.intervalo = normalizeStatusOrTime(d.intervalo||'');
-    d.saida = normalizeStatusOrTime(d.saida||'');
-
     if(isLockedSpecial(d)) continue;
 
-    const isSameParity = ((j-anchorIndex)%2===0);
-    const isRestDay = anchorType==='REST' ? isSameParity : !isSameParity;
+    const isSameParity = ((j-anchor.anchorIndex)%2===0);
+    const isRestDay = anchor.anchorType==='REST' ? isSameParity : !isSameParity;
 
-    if(isRestDay){
-      if(!isLockedSpecial(d)){ d.entrada='Folga'; d.intervalo='Folga'; d.saida='Folga'; }
-    } else {
-      if(template){
-        d.entrada = template.entrada;
-        d.intervalo = template.intervalo;
-        d.saida = template.saida;
-        normalizeTimeTripleForWrap_(d);
-      } else {
-        if(j!==anchorIndex || anchorType!=='WORK'){ d.entrada=''; d.intervalo=''; d.saida=''; }
-      }
+    if(isRestDay && !d.isDobra){
+      d.entrada='Folga'; d.intervalo='Folga'; d.saida='Folga';
+      continue;
     }
+
+    let entrada = isTime(d.entrada) ? d.entrada : templateEntrada;
+    if(!isTime(entrada)){
+      d.entrada=''; d.intervalo=''; d.saida='';
+      continue;
+    }
+    d.entrada = entrada;
+
+    const intervaloAtualValido = isTime(d.intervalo);
+    if(!intervaloAtualValido){
+      d.intervalo = templateIntervalo && isTime(templateIntervalo) ? templateIntervalo : calcDefaultInterval(entrada);
+    }
+
+    if(Number.isFinite(jornadaMin)) d.saida = fromMin(toMin(entrada) + jornadaMin);
+    if(isTime(d.intervalo)) d.intervalo = applyWrap(d.entrada, d.intervalo);
+    if(isTime(d.saida)) d.saida = applyWrap(d.entrada, d.saida);
   }
 }
 
@@ -279,7 +294,7 @@ function toggleFreela(ri){
   else Object.assign(r,{isFreelancer:false,nome:'',funcao:'',escala:'',jornada:''});
   validateAllClient(); renderTable();
 }
-function toggleExc(ri,di,key){model.rows[ri].days[di][key]=!model.rows[ri].days[di][key]; recompute12x36Row(ri); validateAllClient(); renderTable();}
+function toggleExc(ri,di,key){const r=model.rows[ri]; if(r.escala==='12x36'&&key!=='isDobra') return; r.days[di][key]=!r.days[di][key]; recompute12x36Row(ri); validateAllClient(); renderTable();}
 
 function setCell(ri,di,key,val){
   const r=model.rows[ri],c=r.days[di];
@@ -289,6 +304,12 @@ function setCell(ri,di,key,val){
     if(r.escala==='12x36' && ['Dom. mês','Abatimento'].includes(val)){ setError(ri,di,'entrada',"Escala 12x36 não permite 'Dom. mês' nem 'Abatimento'."); validateAllClient(); renderTable(); return; }
     c.entrada=c.intervalo=c.saida=val; recompute12x36Row(ri); validateAllClient(); renderTable(); return;
   }
+
+  if(r.escala==='12x36' && key==='entrada' && isTime(val)){
+    const anchor = get12x36Anchor_(r.days||[]);
+    if(c.entrada==='Folga' || (anchor && (anchor.anchorType==='REST' ? ((di-anchor.anchorIndex)%2===0) : ((di-anchor.anchorIndex)%2!==0))) ) c.isDobra=true;
+  }
+
   c[key]=val;
   if(key!=='entrada') c[key]=applyWrap(c.entrada,c[key]);
   if(key==='entrada' && isTime(val) && !r.isFreelancer && isTime(r.jornada)){
@@ -331,23 +352,22 @@ function validateAllClient(){
       }
 
       if(r.isFreelancer) return;
+      if(r.escala==='12x36') return;
+
       if(allSpecial){
         if(raw.entrada==='Dom. mês' && new Date(Number(v('ano')),Number(v('mes'))-1,di+1).getDay()===0) domMes=true;
         cons=0; return;
       }
       if(isTime(raw.entrada)&&isTime(raw.intervalo)&&isTime(raw.saida)){
         const en=toMin(raw.entrada),it=toMin(raw.intervalo),ex=toMin(raw.saida),jor=toMin(r.jornada||'00:00');
-        if(r.escala!=='12x36'){
-          if(!raw.exceptionMaxSemInt && !raw.isDobra && ((it-en)>maxSem || (ex-(it+dur))>maxSem)) setError(ri,di,'entrada',"Excedeu o máximo sem descanso (Tempo máx sem intervalo). Marque 'Descanso int.' se for exceção.");
-          if(!raw.exceptionExtra && !raw.isDobra && (ex-en-dur)>jor+120) setError(ri,di,'saida',"Excedeu Jornada + 02:00. Marque '+02:00' ou 'Dobra' se for exceção.");
-        }
+        if(!raw.exceptionMaxSemInt && !raw.isDobra && ((it-en)>maxSem || (ex-(it+dur))>maxSem)) setError(ri,di,'entrada',"Excedeu o máximo sem descanso (Tempo máx sem intervalo). Marque 'Descanso int.' se for exceção.");
+        if(!raw.exceptionExtra && !raw.isDobra && (ex-en-dur)>jor+120) setError(ri,di,'saida',"Excedeu Jornada + 02:00. Marque '+02:00' ou 'Dobra' se for exceção.");
         cons++; const lim={'6x1':6,'5x2':5,'4x3':4,'12x36':1}[r.escala]||99;
         if(cons>lim && !raw.exceptionEscala) setError(ri,di,'entrada',"Violação de escala (dias consecutivos). Marque 'Escala sem.' se for exceção.");
       } else if(['Folga','Dom. mês','Férias','Licença'].includes(raw.entrada)) cons=0;
     });
 
-    // Regra 11h entre jornadas (não freelancer, todos regimes)
-    if(!r.isFreelancer){
+    if(!r.isFreelancer && r.escala!=='12x36'){
       for(let di=0; di<r.days.length-1; di++){
         const d1=r.days[di], d2=r.days[di+1];
         const sp1=specialStatuses.includes(d1.entrada), sp2=specialStatuses.includes(d2.entrada);
@@ -435,7 +455,7 @@ function renderTable(){
         h+=`<td class='${cls}'><input${t} value='${c[f]||''}' onchange='setCell(${ri},${di},"${f}",this.value)' onpaste='onPasteCell(event,${ri},${di},"${f}")' list='statusList' style='width:76px;border-radius:7px'></td>`;
       });
       const dis12 = (r.escala==='12x36');
-      h+=`<td><div class='exc-stack'>${dis12?'':`<button class='chip' onclick='toggleExc(${ri},${di},"exceptionMaxSemInt")'>Descanso int.</button><button class='chip' onclick='toggleExc(${ri},${di},"exceptionExtra")'>+02:00</button>`}<button class='chip' onclick='toggleExc(${ri},${di},"exceptionEscala")'>Escala sem.</button><button class='chip' onclick='toggleExc(${ri},${di},"exceptionRest11")'>Descanso 11h</button><button class='chip' onclick='toggleExc(${ri},${di},"isDobra")'>Dobra</button></div></td>`;
+      h+=`<td><div class='exc-stack'>${dis12?`<button class='chip' onclick='toggleExc(${ri},${di},"isDobra")'>Dobra</button>`:`<button class='chip' onclick='toggleExc(${ri},${di},"exceptionMaxSemInt")'>Descanso int.</button><button class='chip' onclick='toggleExc(${ri},${di},"exceptionExtra")'>+02:00</button><button class='chip' onclick='toggleExc(${ri},${di},"exceptionEscala")'>Escala sem.</button><button class='chip' onclick='toggleExc(${ri},${di},"exceptionRest11")'>Descanso 11h</button><button class='chip' onclick='toggleExc(${ri},${di},"isDobra")'>Dobra</button>`}</div></td>`;
     });
     h+=`<td>${rowIndicators(r,ri)}</td></tr>`;
   });

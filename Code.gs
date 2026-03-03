@@ -316,7 +316,7 @@ function validatePayload_(payload, opts) {
       }
     });
 
-    if (!row.isFreelancer) {
+    if (!row.isFreelancer && row.escala !== '12x36') {
       for (let i = 0; i < (row.days || []).length - 1; i++) {
         const d1 = normalizeDayCell_(row.days[i], row);
         const d2 = normalizeDayCell_(row.days[i + 1], row);
