@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Escalas</title>
+  <style>
+    body{font-family:Arial,sans-serif;margin:16px;background:#fafafa;color:#2c2c2c}
+    .card{background:#fff;border:1px solid #e7e2d9;border-radius:12px;padding:12px;margin-bottom:10px}
+    .row{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end}
+    .field{display:flex;flex-direction:column;min-width:180px}
+    label{font-size:12px;color:#555}
+    input,button{padding:7px;border-radius:8px;border:1px solid #d7d7d7}
+    button{background:#fff;cursor:pointer}
+    .chip{padding:2px 7px;border-radius:999px;font-size:10px;margin-right:3px;border:1px solid #d0d0d0;background:#fff}
+    .loading{padding:20px;text-align:center;color:#8a6d3b}
+    #tableWrap{overflow:auto;max-height:70vh;border:1px solid #eee;border-radius:10px;background:#fff}
+    table{border-collapse:separate;border-spacing:0;min-width:100%}
+    th,td{border-right:1px solid #f0ede8;border-bottom:1px solid #f0ede8;padding:4px;font-size:12px;white-space:nowrap}
+    th{background:#f6e9d6}
+    .sticky-head.sticky-col{background:#f6e9d6 !important}
+    .sticky-head-2{background:#fcf4e8}
+    .sticky-head-2.sticky-col{background:#fcf4e8 !important}
+    .exc-stack{display:flex;flex-direction:column;gap:4px;align-items:stretch}
+    .exc-stack .chip{margin-right:0;text-align:center}
+    .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.35);display:flex;align-items:center;justify-content:center;z-index:9999}
+    .modal{background:#fff;border-radius:14px;padding:14px;width:min(520px,92vw);border:1px solid #e7e2d9}
+    .modal-title{font-weight:700;margin-bottom:8px}
+    .modal-body{margin-bottom:10px}
+    .hidden{display:none}
+    .err-tip{position:fixed;z-index:10000;max-width:260px;background:#fff;border:1px solid #e0d6b8;border-radius:10px;padding:8px 10px;box-shadow:0 8px 24px rgba(0,0,0,.12);font-size:12px}
+    .err-tip.hidden{display:none}
+    .sticky-head{position:sticky;top:0;z-index:50}
+    .sticky-head-2{position:sticky;top:36px;z-index:45;background:#fcf4e8}
+    .sticky-col{position:sticky;background:#fcf4e8}
+    .sticky-col-1{left:var(--sticky-left-1,0px)}
+    .sticky-col-2{left:var(--sticky-left-2,260px)}
+    .sticky-col-3{left:var(--sticky-left-3,440px)}
+    .sticky-col-4{left:var(--sticky-left-4,550px)}
+    td.sticky-col{z-index:40;background:#fcf4e8}
+    th.sticky-col{z-index:55}
+    td.sticky-col input{background:#fff}
+    .status{border-left:3px solid transparent}
+    .status-Folga{background:#f4f9ff;border-left-color:#8ab8e8}
+    .status-Dom{background:#fff6f6;border-left-color:#eb9a9a}
+    .status-Abatimento{background:#f2fbf2;border-left-color:#98d39b}
+    .status-Licenca,.status-Ferias{background:#f8f3ff;border-left-color:#ba9ee5}
+    .is-dobra{box-shadow:inset 0 0 0 1px #f0a443}
+    .cell-error{background:#fff4b8 !important}
+    .small{font-size:11px;color:#666}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h3>Web App de Escalas</h3>
+    <div class="row">
+      <div class="field"><label>Empresa</label><input list="empresaList" id="empresa"><datalist id="empresaList"></datalist></div>
+      <div class="field"><label>Protocolos</label><input id="protocolos" placeholder="PRT...,PRT..."></div>
+      <button onclick="loadProtocols()">Carregar protocolos</button>
+    </div>
+  </div>
+
+  <div id="headerFields" class="card"></div>
+  <div id="tableWrap" class="card"></div>
+  <div class="card row">
+    <button onclick="addRow()">+ Linha</button>
+    <button onclick="removeRow()">- Linha</button>
+    <button onclick="enviarAnalise()">Enviar para análise</button>
+    <button onclick="salvarCopia()">Salvar cópia</button>
+    <button onclick="envioColab()">Envio colaboradores</button>
+  </div>
+
+
+  <div id="modalOverlay" class="modal-overlay hidden">
+    <div class="modal">
+      <div class="modal-title" id="modalTitle"></div>
+      <div class="modal-body" id="modalBody"></div>
+      <div class="modal-actions">
+        <button onclick="closeModal()">Fechar</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="errTip" class="err-tip hidden"></div>
+
+<script>
+let bootstrap=null;
+let cellErrors={};
+let model={empresa:'',rows:[],feriados:{},eventos:{},prevFat:{},weather:{},freelancerCount:0,weekdayNames:['domingo','segunda-feira','terça-feira','quarta-feira','quinta-feira','sexta-feira','sábado']};
+const specialStatuses=['Folga','Abatimento','Dom. mês','Licença','Férias'];
+const empresaEl = document.getElementById('empresa');
+const empresaListEl = document.getElementById('empresaList');
+const headerFieldsEl = document.getElementById('headerFields');
+const tableWrapEl = document.getElementById('tableWrap');
+const modalOverlayEl = document.getElementById('modalOverlay');
+const modalTitleEl = document.getElementById('modalTitle');
+const modalBodyEl = document.getElementById('modalBody');
+const errTipEl = document.getElementById('errTip');
+let tipOpen = false;
+
+function init(){
+  setLoading(true);
+  google.script.run.withSuccessHandler(d=>{
+    bootstrap=d;
+    model.feriados=d.feriados||{}; model.eventos=d.eventos||{}; model.prevFat=d.prevFat||{}; model.weather=d.weather||{};
+    model.weekdayNames=(d.config&&d.config.weekdayNames)||model.weekdayNames;
+    empresaListEl.innerHTML=(d.empresas||[]).map(e=>`<option value="${e}"></option>`).join('');
+    empresaEl.onchange=onEmpresaChange; renderHeaderFields();
+    tableWrapEl.addEventListener('mouseover', (e)=>{ if(e.target.matches('input[data-err]')) showErrTip(e, e.target.getAttribute('data-err')); });
+    tableWrapEl.addEventListener('mousemove', (e)=>{ if(tipOpen) moveErrTip(e); });
+    tableWrapEl.addEventListener('mouseout', (e)=>{ if(e.target.matches('input[data-err]')) hideErrTip(); });
+    setLoading(false);
+  }).withFailureHandler(e=>{setLoading(false); alert(e.message||e)}).getBootstrapData();
+}
+
+function setLoading(on){ tableWrapEl.innerHTML=on?'<div class="loading">Carregando...</div>':tableWrapEl.innerHTML; }
+function escapeAttr(s){ return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+function showPdfModal(title,url,extraMsg){
+  modalTitleEl.textContent=title;
+  modalBodyEl.innerHTML=`<div style="margin-bottom:8px">${extraMsg||''}</div><a href="${escapeAttr(url)}" target="_blank" rel="noopener">Abrir PDF</a>`;
+  modalOverlayEl.classList.remove('hidden');
+}
+function closeModal(){ modalOverlayEl.classList.add('hidden'); }
+function showErrTip(e,msg){
+  if(!msg) return;
+  errTipEl.innerText = String(msg||'');
+  errTipEl.classList.remove('hidden');
+  tipOpen = true;
+  moveErrTip(e);
+}
+function moveErrTip(e){
+  if(!tipOpen) return;
+  const pad=12;
+  let x=e.clientX+pad, y=e.clientY+pad;
+  const w=errTipEl.offsetWidth||260, h=errTipEl.offsetHeight||60;
+  const vw=window.innerWidth, vh=window.innerHeight;
+  if(x+w>vw-8) x=vw-w-8;
+  if(y+h>vh-8) y=vh-h-8;
+  errTipEl.style.left = x+'px';
+  errTipEl.style.top = y+'px';
+}
+function hideErrTip(){ tipOpen=false; errTipEl.classList.add('hidden'); }
+function v(id){return document.getElementById(id).value}
+function field(id,l,t,val){return `<div class="field"><label>${l}</label><input id="${id}" type="${t}" value="${val??''}"></div>`}
+function daysInMonth(){return new Date(Number(v('ano')),Number(v('mes')),0).getDate()}
+function dateKey(day){return `${v('ano')}-${String(v('mes')).padStart(2,'0')}-${String(day).padStart(2,'0')}`}
+function dateLabel(day){const d=new Date(Number(v('ano')),Number(v('mes'))-1,day);return `${String(day).padStart(2,'0')}/${String(v('mes')).padStart(2,'0')}/${v('ano')} (${model.weekdayNames[d.getDay()]})`}
+function refreshWeather(){
+  const ano=Number(v('ano')), mes=Number(v('mes'));
+  if(!ano || !mes) return;
+  google.script.run.withSuccessHandler(w=>{ model.weather=w||{}; renderTable(); }).withFailureHandler(()=>{}).getWeatherForMonth(ano,mes);
+}
+
+function renderHeaderFields(){
+  headerFieldsEl.innerHTML=`<div class="row">${field('valorTaxi','Valor Taxi','number','0')}${field('valorRefeicao','Valor Refeição','number','0')}${field('valorDobra','Valor Dobra','number','0')}${field('emailAnalise','Email análise','email','')}${field('duracaoIntervalo','Tempo intervalo HH:MM','text','01:00')}</div><div class="row">${field('maxSemIntervalo','Tempo máx sem intervalo','text','06:00')}${field('protocolo','Protocolo(s)','text','')}${field('mes','Mês','number','')}${field('ano','Ano','number',new Date().getFullYear())}${field('valorHoraFreelancer','Valor hora freelancer','number','0')}</div>`;
+  const mesEl = document.getElementById('mes');
+  const anoEl = document.getElementById('ano');
+  if (!mesEl.value && bootstrap?.config?.monthDefault) mesEl.value = bootstrap.config.monthDefault;
+  if (!anoEl.value && bootstrap?.config?.yearDefault) anoEl.value = bootstrap.config.yearDefault;
+
+  let anoTimer = null;
+  mesEl.addEventListener('change', ()=>{setLoading(true); setTimeout(()=>{syncDays(); validateAllClient(); renderTable(); refreshWeather(); setLoading(false)},80)});
+  anoEl.addEventListener('change', ()=>{
+    clearTimeout(anoTimer);
+    anoTimer = setTimeout(()=>{
+      const ano = Number(anoEl.value);
+      google.script.run.withFailureHandler(()=>{}).setAnoAqui(ano);
+      setLoading(true);
+      setTimeout(()=>{syncDays(); validateAllClient(); renderTable(); refreshWeather(); setLoading(false)},80);
+    },200);
+  });
+}
+
+function onEmpresaChange(){
+  const emp=v('empresa').trim();
+  if(!(bootstrap.empresas||[]).includes(emp)) return;
+
+  const mesEl = document.getElementById('mes');
+  const anoEl = document.getElementById('ano');
+  if (!mesEl.value) mesEl.value = bootstrap?.config?.monthDefault || (new Date().getMonth()+1);
+  if (!anoEl.value) anoEl.value = bootstrap?.config?.yearDefault || new Date().getFullYear();
+
+  setLoading(true);
+  google.script.run.withSuccessHandler(()=>{
+    model.empresa=emp; model.rows=[]; model.freelancerCount=0;
+    for(let i=0;i<(bootstrap?.config?.defaultRows||2);i++) addRow(false);
+    syncDays();
+    validateAllClient();
+    renderTable();
+    refreshWeather();
+    setLoading(false);
+  }).withFailureHandler(e=>{ setLoading(false); alert(e.message||e); }).setAnoAqui(Number(anoEl.value));
+}
+
+function createEmptyDay(){return {entrada:'',intervalo:'',saida:'',exceptionMaxSemInt:false,exceptionExtra:false,exceptionEscala:false,exceptionRest11:false,isDobra:false}}
+function addRow(render=true){ if(!model.empresa) return; if(model.rows.length>=100) return; const d=(Number(v('mes'))&&Number(v('ano')))?daysInMonth():31; model.rows.push({nome:'',funcao:'',escala:'',jornada:'',isFreelancer:false,days:Array.from({length:d},createEmptyDay)}); if(render){validateAllClient(); renderTable();}}
+function removeRow(){ if(model.rows.length<=2) return; model.rows.pop(); validateAllClient(); renderTable();}
+function removeRowAt(ri){ if(model.rows.length<=2) return; model.rows.splice(ri,1); validateAllClient(); renderTable(); }
+function syncDays(){ const d=Number(v('mes'))&&Number(v('ano') )?daysInMonth():31; model.rows.forEach(r=>r.days=Array.from({length:d},(_,i)=>r.days[i]||createEmptyDay())); }
+
+function normalizeStatusOrTime(raw){
+  const s=(raw||'').trim(); if(!s) return '';
+  if(/^\d{1,3}:\d{2}$/.test(s)) return s;
+  const k=s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[()\.]/g,'').replace(/\s+/g,' ').trim();
+  const map={'folga':'Folga','abatimento':'Abatimento','dom mes':'Dom. mês','domingo do mes':'Dom. mês','domingo mes':'Dom. mês','licenca':'Licença','ferias':'Férias'};
+  return map[k]||s;
+}
+function toMin(t){const m=String(t||'').match(/^(\d{1,3}):(\d{2})$/); if(!m) return NaN; return Number(m[1])*60+Number(m[2])}
+function fromMin(x){const h=Math.floor(x/60),m=x%60; return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`}
+function isTime(t){return /^\d{1,3}:\d{2}$/.test(t) && !Number.isNaN(toMin(t));}
+function applyWrap(entrada,val){ if(isTime(entrada)&&isTime(val)&&toMin(val)<toMin(entrada)) return fromMin(toMin(val)+1440); return val; }
+function isSpecialEntry(v){ return specialStatuses.includes(v); }
+function normalizeTimeTripleForWrap_(d){
+  if(isTime(d.entrada) && isTime(d.intervalo) && toMin(d.intervalo)<toMin(d.entrada)) d.intervalo = fromMin(toMin(d.intervalo)+1440);
+  if(isTime(d.entrada) && isTime(d.saida) && toMin(d.saida)<toMin(d.entrada)) d.saida = fromMin(toMin(d.saida)+1440);
+}
+function isLockedSpecial(d){ return ['Férias','Licença','Abatimento','Dom. mês'].includes(d.entrada); }
+
+function get12x36Anchor_(days){
+  for(let i=0;i<days.length;i++){
+    const e = normalizeStatusOrTime(days[i].entrada||'');
+    if(e==='Folga') return {anchorIndex:i, anchorType:'REST'};
+    if(isTime(e)) return {anchorIndex:i, anchorType:'WORK'};
+  }
+  return null;
+}
+
+function recompute12x36Row(ri){
+  const r = model.rows[ri];
+  if(!r || r.isFreelancer || r.escala!=='12x36') return;
+
+  const days = r.days || [];
+  const anchor = get12x36Anchor_(days);
+  if(!anchor) return;
+
+  const jornadaMin = isTime(r.jornada) ? toMin(r.jornada) : NaN;
+  const calcDefaultInterval = (entrada)=>{
+    if(!isTime(entrada) || Number.isNaN(jornadaMin)) return '';
+    const mid = toMin(entrada) + Math.round((jornadaMin/2)/30)*30;
+    return fromMin(mid);
+  };
+
+  let templateEntrada = '';
+  let templateIntervalo = '';
+  for(let i=0;i<days.length;i++){
+    const d=days[i];
+    d.entrada = normalizeStatusOrTime(d.entrada||'');
+    d.intervalo = normalizeStatusOrTime(d.intervalo||'');
+    d.saida = normalizeStatusOrTime(d.saida||'');
+    if(!templateEntrada && isTime(d.entrada)) templateEntrada = d.entrada;
+    if(!templateIntervalo && isTime(d.intervalo)) templateIntervalo = d.intervalo;
+  }
+
+  for(let j=0;j<days.length;j++){
+    const d = days[j];
+    if(isLockedSpecial(d)) continue;
+
+    const isSameParity = ((j-anchor.anchorIndex)%2===0);
+    const isRestDay = anchor.anchorType==='REST' ? isSameParity : !isSameParity;
+
+    if(isRestDay && !d.isDobra){
+      d.entrada='Folga'; d.intervalo='Folga'; d.saida='Folga';
+      continue;
+    }
+
+    let entrada = isTime(d.entrada) ? d.entrada : templateEntrada;
+    if(!isTime(entrada)){
+      d.entrada=''; d.intervalo=''; d.saida='';
+      continue;
+    }
+    d.entrada = entrada;
+
+    const intervaloAtualValido = isTime(d.intervalo);
+    if(!intervaloAtualValido){
+      d.intervalo = templateIntervalo && isTime(templateIntervalo) ? templateIntervalo : calcDefaultInterval(entrada);
+    }
+
+    if(Number.isFinite(jornadaMin)) d.saida = fromMin(toMin(entrada) + jornadaMin);
+    if(isTime(d.intervalo)) d.intervalo = applyWrap(d.entrada, d.intervalo);
+    if(isTime(d.saida)) d.saida = applyWrap(d.entrada, d.saida);
+  }
+}
+
+
+function setColab(ri,val){
+  const c=(bootstrap.colaboradores||[]).find(x=>x.nome===val && x.empresa===model.empresa); if(!c) return;
+  Object.assign(model.rows[ri],{isFreelancer:false,nome:c.nome,funcao:c.funcao,escala:c.escala,jornada:c.jornada});
+  recompute12x36Row(ri);
+  validateAllClient(); renderTable();
+}
+function toggleFreela(ri){
+  const r=model.rows[ri];
+  if(!r.isFreelancer){model.freelancerCount++; Object.assign(r,{isFreelancer:true,nome:`Freelancer ${model.freelancerCount}`,funcao:'',escala:'',jornada:''});}
+  else Object.assign(r,{isFreelancer:false,nome:'',funcao:'',escala:'',jornada:''});
+  validateAllClient(); renderTable();
+}
+function toggleExc(ri,di,key){const r=model.rows[ri]; if(r.escala==='12x36'&&key!=='isDobra') return; r.days[di][key]=!r.days[di][key]; recompute12x36Row(ri); validateAllClient(); renderTable();}
+
+function setCell(ri,di,key,val){
+  const r=model.rows[ri],c=r.days[di];
+  val=normalizeStatusOrTime(val);
+  if(key==='entrada' && !val){c.entrada=''; c.intervalo=''; c.saida=''; recompute12x36Row(ri); validateAllClient(); renderTable(); return;}
+  if(key==='entrada' && specialStatuses.includes(val)){
+    if(r.escala==='12x36' && ['Dom. mês','Abatimento'].includes(val)){ setError(ri,di,'entrada',"Escala 12x36 não permite 'Dom. mês' nem 'Abatimento'."); validateAllClient(); renderTable(); return; }
+    c.entrada=c.intervalo=c.saida=val; recompute12x36Row(ri); validateAllClient(); renderTable(); return;
+  }
+
+  if(r.escala==='12x36' && key==='entrada' && isTime(val)){
+    const anchor = get12x36Anchor_(r.days||[]);
+    if(c.entrada==='Folga' || (anchor && (anchor.anchorType==='REST' ? ((di-anchor.anchorIndex)%2===0) : ((di-anchor.anchorIndex)%2!==0))) ) c.isDobra=true;
+  }
+
+  c[key]=val;
+  if(key!=='entrada') c[key]=applyWrap(c.entrada,c[key]);
+  if(key==='entrada' && isTime(val) && !r.isFreelancer && isTime(r.jornada)){
+    const base = toMin(val) + toMin(r.jornada);
+    if(r.escala==='12x36') c.saida = fromMin(base);
+    else if(isTime(v('duracaoIntervalo'))) c.saida = fromMin(base + toMin(v('duracaoIntervalo')));
+    else c.saida = fromMin(base);
+  }
+  if(key==='intervalo'||key==='saida') c[key]=applyWrap(c.entrada,c[key]);
+  recompute12x36Row(ri);
+  validateAllClient(); renderTable();
+}
+
+function setError(ri,di,field,msg){cellErrors[ri]=cellErrors[ri]||{};cellErrors[ri][di]=cellErrors[ri][di]||{};cellErrors[ri][di][field]=msg}
+function clearErrors(){cellErrors={}}
+function getError(ri,di,field){return (((cellErrors[ri]||{})[di]||{})[field])||''}
+function countRowErrors(ri){let n=0;const row=cellErrors[ri]||{};Object.values(row).forEach(d=>n+=Object.keys(d).length);return n}
+
+function validateAllClient(){
+  clearErrors(); syncDays();
+  const dur=toMin(v('duracaoIntervalo')), maxSem=toMin(v('maxSemIntervalo'));
+  model.rows.forEach((r,ri)=>{
+    let cons=0, domMes=false;
+    r.days.forEach((raw,di)=>{
+      raw.entrada=normalizeStatusOrTime(raw.entrada); raw.intervalo=normalizeStatusOrTime(raw.intervalo); raw.saida=normalizeStatusOrTime(raw.saida);
+      if (r.escala==='12x36') {
+        const v12 = raw.entrada;
+        if (v12==='Dom. mês' || v12==='Abatimento') setError(ri, di, 'entrada', "Escala 12x36 não permite 'Dom. mês' nem 'Abatimento'.");
+      }
+      if(isTime(raw.entrada)&&isTime(raw.intervalo)&&toMin(raw.intervalo)<toMin(raw.entrada)) raw.intervalo=fromMin(toMin(raw.intervalo)+1440);
+      if(isTime(raw.entrada)&&isTime(raw.saida)&&toMin(raw.saida)<toMin(raw.entrada)) raw.saida=fromMin(toMin(raw.saida)+1440);
+
+      const allSpecial=specialStatuses.includes(raw.entrada)&&raw.entrada===raw.intervalo&&raw.entrada===raw.saida;
+      if(!allSpecial){
+        ['entrada','intervalo','saida'].forEach(f=>{const vv=raw[f]; if(vv && !isTime(vv)) setError(ri,di,f,'Use HH:MM (ex.: 08:00) ou um status: Folga, Abatimento, Dom. mês, Licença, Férias.');});
+        if(isTime(raw.entrada)&&isTime(raw.intervalo)&&isTime(raw.saida)){
+          if(!(toMin(raw.entrada)<toMin(raw.intervalo)&&toMin(raw.intervalo)<toMin(raw.saida))) setError(ri,di,'entrada','A ordem precisa ser: Entrada < Intervalo < Saída.');
+          if(toMin(raw.intervalo)+dur>toMin(raw.saida)) setError(ri,di,'intervalo','Intervalo + duração (Tempo intervalo) não pode passar da Saída.');
+        }
+      }
+
+      if(r.isFreelancer) return;
+      if(r.escala==='12x36') return;
+
+      if(allSpecial){
+        if(raw.entrada==='Dom. mês' && new Date(Number(v('ano')),Number(v('mes'))-1,di+1).getDay()===0) domMes=true;
+        cons=0; return;
+      }
+      if(isTime(raw.entrada)&&isTime(raw.intervalo)&&isTime(raw.saida)){
+        const en=toMin(raw.entrada),it=toMin(raw.intervalo),ex=toMin(raw.saida),jor=toMin(r.jornada||'00:00');
+        if(!raw.exceptionMaxSemInt && !raw.isDobra && ((it-en)>maxSem || (ex-(it+dur))>maxSem)) setError(ri,di,'entrada',"Excedeu o máximo sem descanso (Tempo máx sem intervalo). Marque 'Descanso int.' se for exceção.");
+        if(!raw.exceptionExtra && !raw.isDobra && (ex-en-dur)>jor+120) setError(ri,di,'saida',"Excedeu Jornada + 02:00. Marque '+02:00' ou 'Dobra' se for exceção.");
+        cons++; const lim={'6x1':6,'5x2':5,'4x3':4,'12x36':1}[r.escala]||99;
+        if(cons>lim && !raw.exceptionEscala) setError(ri,di,'entrada',"Violação de escala (dias consecutivos). Marque 'Escala sem.' se for exceção.");
+      } else if(['Folga','Dom. mês','Férias','Licença'].includes(raw.entrada)) cons=0;
+    });
+
+    if(!r.isFreelancer && r.escala!=='12x36'){
+      for(let di=0; di<r.days.length-1; di++){
+        const d1=r.days[di], d2=r.days[di+1];
+        const sp1=specialStatuses.includes(d1.entrada), sp2=specialStatuses.includes(d2.entrada);
+        if(sp1 || sp2) continue;
+        if(!(isTime(d1.saida) && isTime(d2.entrada))) continue;
+        const endAbs = (di*1440) + toMin(d1.saida);
+        const startAbs = ((di+1)*1440) + toMin(d2.entrada);
+        const rest = startAbs - endAbs;
+        if(rest < 660 && !d2.exceptionRest11) setError(ri, di+1, 'entrada', "Descanso mínimo entre jornadas é 11:00. Ajuste a entrada ou marque a exceção ‘Descanso 11h’.");
+      }
+    }
+
+    if(!r.isFreelancer && r.escala && r.escala!=='12x36' && !domMes) setError(ri,0,'entrada',"Falta pelo menos 1 'Dom. mês' em um domingo real neste mês.");
+  });
+}
+
+function rowIndicators(r,ri){const e=countRowErrors(ri); const domOk=r.isFreelancer||r.escala==='12x36'||r.days.some((c,i)=>c.entrada==='Dom. mês'&&new Date(Number(v('ano')),Number(v('mes'))-1,i+1).getDay()===0); return `<span class="chip">Dom mês: ${domOk?'OK':'Falta'}</span><span class="chip">Erros: ${e}</span>`}
+function statusClass(s){if(s==='Dom. mês') return 'status status-Dom'; if(s==='Licença') return 'status status-Licenca'; if(s==='Férias') return 'status status-Ferias'; if(s==='Folga'||s==='Abatimento') return `status status-${s}`; return ''}
+function cellClass(ri,di,field,c){let cls=''; if(specialStatuses.includes(c.entrada)) cls=statusClass(c.entrada); if(c.isDobra) cls+=' is-dobra'; if(getError(ri,di,field)) cls+=' cell-error'; return cls.trim()}
+
+function headerObs(day){const k=dateKey(day),f=model.feriados[k]||[],e=model.eventos[k]||[],p=model.prevFat[k],w=model.weather[k],clima=w?`${w.min??'—'}°/${w.max??'—'}° ${w.rain??'—'}%`:'—'; const info=`<span title="Dados de clima via Open-Meteo (previsão/arquivo). Pode haver dias sem dados (—), especialmente em meses futuros.">ⓘ</span>`; return `${[...f,...e].join(', ')} ${p?`[${p}]`:''} | ${clima} ${info}`.trim()}
+function colabEditor(ri,r){const arr=(bootstrap.colaboradores||[]).filter(c=>c.empresa===model.empresa).map(c=>c.nome); return `<input list='colab_${ri}' value='${r.nome||''}' onchange='setColab(${ri},this.value)' style='width:180px'><datalist id='colab_${ri}'>${arr.map(n=>`<option value='${n}'></option>`).join('')}</datalist><br><button class='chip' onclick='toggleFreela(${ri})'>${r.isFreelancer?'Voltar':'Freelancer'}</button>`}
+function funcEditor(ri,r){if(!r.isFreelancer) return r.funcao||''; const fun=(bootstrap.funcoes||[]).filter(f=>f.empresasTokens.includes(model.empresa)).map(f=>f.nome); return `<input list='func_${ri}' value='${r.funcao||''}' onchange='model.rows[${ri}].funcao=this.value'><datalist id='func_${ri}'>${fun.map(n=>`<option value='${n}'></option>`).join('')}</datalist>`}
+
+function onPasteCell(ev,ri,di,field){
+  const txt=(ev.clipboardData||window.clipboardData).getData('text');
+  if(!txt || !txt.includes('\t') && !txt.includes('\n')) return;
+  ev.preventDefault();
+  const grid=txt.split(/\r?\n/).filter(Boolean).map(r=>r.split('\t'));
+  const fields=['entrada','intervalo','saida'];
+  const startCol=di*3+fields.indexOf(field);
+  const affectedRows=new Set();
+  for(let rOff=0;rOff<grid.length;rOff++){
+    const tr=ri+rOff; if(tr>=model.rows.length||tr>=100) break;
+    affectedRows.add(tr);
+    for(let cOff=0;cOff<grid[rOff].length;cOff++){
+      const abs=startCol+cOff; const tDay=Math.floor(abs/3); const f=fields[abs%3];
+      if(tDay>=model.rows[tr].days.length) continue;
+      let val=normalizeStatusOrTime(grid[rOff][cOff]);
+      const cell=model.rows[tr].days[tDay];
+      if(f==='entrada'&&specialStatuses.includes(val)){cell.entrada=cell.intervalo=cell.saida=val; continue;}
+      cell[f]=val;
+      if((f==='intervalo'||f==='saida')&&isTime(cell.entrada)&&isTime(cell[f])&&toMin(cell[f])<toMin(cell.entrada)) cell[f]=fromMin(toMin(cell[f])+1440);
+    }
+  }
+  affectedRows.forEach(rIndex=>recompute12x36Row(rIndex));
+  validateAllClient(); renderTable();
+}
+
+
+function debounce(fn, wait){ let t=null; return (...args)=>{ clearTimeout(t); t=setTimeout(()=>fn(...args), wait); }; }
+function applyStickyOffsets(){
+  const table = tableWrapEl.querySelector('table');
+  if(!table) return;
+  const headRow = table.querySelector('tr');
+  if(!headRow) return;
+  const ths = Array.from(headRow.children).slice(0,4);
+  if(ths.length < 4) return;
+  const w1 = ths[0].offsetWidth;
+  const w2 = ths[1].offsetWidth;
+  const w3 = ths[2].offsetWidth;
+  table.style.setProperty('--sticky-left-1','0px');
+  table.style.setProperty('--sticky-left-2', w1 + 'px');
+  table.style.setProperty('--sticky-left-3', (w1+w2) + 'px');
+  table.style.setProperty('--sticky-left-4', (w1+w2+w3) + 'px');
+}
+const applyStickyOffsetsDebounced = debounce(applyStickyOffsets, 80);
+window.addEventListener('resize', applyStickyOffsetsDebounced);
+
+function renderTable(){
+  const mes=Number(v('mes')),ano=Number(v('ano')); if(!mes||!ano||!model.empresa){tableWrapEl.innerHTML=''; return}
+  let h='<table><colgroup><col style="width:260px"><col style="width:180px"><col style="width:110px"><col style="width:110px"></colgroup><tr>';
+  h+='<th class="sticky-head sticky-col sticky-col-1">Linha</th><th class="sticky-head sticky-col sticky-col-2">Função</th><th class="sticky-head sticky-col sticky-col-3">Escala</th><th class="sticky-head sticky-col sticky-col-4">Jornada</th>';
+  for(let d=1;d<=daysInMonth();d++) h+=`<th class='sticky-head' colspan='4'>${dateLabel(d)}<br><span class='small'>${headerObs(d)}</span></th>`;
+  h+='<th class="sticky-head">Resumo</th></tr><tr>';
+  h+='<th class="sticky-head-2 sticky-col sticky-col-1"></th><th class="sticky-head-2 sticky-col sticky-col-2"></th><th class="sticky-head-2 sticky-col sticky-col-3"></th><th class="sticky-head-2 sticky-col sticky-col-4"></th>';
+  for(let d=1;d<=daysInMonth();d++) h+="<th class='sticky-head-2'>Entrada</th><th class='sticky-head-2'>Intervalo</th><th class='sticky-head-2'>Saída</th><th class='sticky-head-2'>Exceções</th>";
+  h+='<th class="sticky-head-2"></th></tr>';
+
+  model.rows.forEach((r,ri)=>{
+    h+=`<tr><td class='sticky-col sticky-col-1'><button class='chip' onclick='removeRowAt(${ri})'>🗑</button><br>${colabEditor(ri,r)}</td><td class='sticky-col sticky-col-2'>${funcEditor(ri,r)}</td><td class='sticky-col sticky-col-3'>${r.escala||''}</td><td class='sticky-col sticky-col-4'>${r.jornada||''}</td>`;
+    r.days.forEach((c,di)=>{
+      ['entrada','intervalo','saida'].forEach(f=>{
+        const err=getError(ri,di,f),cls=cellClass(ri,di,f,c),t=err?` data-err="${escapeAttr(err)}" title="${escapeAttr(err)}"`:'';
+        h+=`<td class='${cls}'><input${t} value='${c[f]||''}' onchange='setCell(${ri},${di},"${f}",this.value)' onpaste='onPasteCell(event,${ri},${di},"${f}")' list='statusList' style='width:76px;border-radius:7px'></td>`;
+      });
+      const dis12 = (r.escala==='12x36');
+      h+=`<td><div class='exc-stack'>${dis12?`<button class='chip' onclick='toggleExc(${ri},${di},"isDobra")'>Dobra</button>`:`<button class='chip' onclick='toggleExc(${ri},${di},"exceptionMaxSemInt")'>Descanso int.</button><button class='chip' onclick='toggleExc(${ri},${di},"exceptionExtra")'>+02:00</button><button class='chip' onclick='toggleExc(${ri},${di},"exceptionEscala")'>Escala sem.</button><button class='chip' onclick='toggleExc(${ri},${di},"exceptionRest11")'>Descanso 11h</button><button class='chip' onclick='toggleExc(${ri},${di},"isDobra")'>Dobra</button>`}</div></td>`;
+    });
+    h+=`<td>${rowIndicators(r,ri)}</td></tr>`;
+  });
+
+  h+=`</table><datalist id='statusList'>${specialStatuses.map(s=>`<option value='${s}'></option>`).join('')}</datalist>`;
+  tableWrapEl.innerHTML=h;
+  applyStickyOffsets();
+}
+
+function asyncApplyLoadedPayload(p){
+  const keys=['empresa','valorTaxi','valorRefeicao','valorDobra','emailAnalise','duracaoIntervalo','maxSemIntervalo','protocolo','mes','ano','valorHoraFreelancer'];
+  keys.forEach(k=>{ const el=document.getElementById(k); if(el && p[k]!==undefined) el.value=p[k]; });
+  setLoading(true);
+  google.script.run.withSuccessHandler(()=>{
+    model.empresa = p.empresa;
+    model.rows = p.rows || [];
+    let maxN = 0;
+    model.rows.forEach(r=>{ const m=String(r.nome||'').match(/^Freelancer\s+(\d+)/i); if(m) maxN=Math.max(maxN, Number(m[1])); });
+    model.freelancerCount = maxN;
+    syncDays();
+    validateAllClient();
+    refreshWeather();
+    renderTable();
+    setLoading(false);
+  }).withFailureHandler(e=>{ setLoading(false); alert(e.message||e); }).setAnoAqui(Number(p.ano));
+}
+
+function buildPayload(){return {empresa:v('empresa'),valorTaxi:Number(v('valorTaxi')),valorRefeicao:Number(v('valorRefeicao')),valorDobra:Number(v('valorDobra')),emailAnalise:v('emailAnalise'),duracaoIntervalo:v('duracaoIntervalo'),maxSemIntervalo:v('maxSemIntervalo'),protocolo:v('protocolo'),mes:Number(v('mes')),ano:Number(v('ano')),valorHoraFreelancer:Number(v('valorHoraFreelancer')),rows:model.rows,feriados:model.feriados,eventos:model.eventos,prevFat:model.prevFat}}
+
+function enviarAnalise(){validateAllClient(); if(Object.keys(cellErrors).length) return alert('Existem erros destacados em amarelo. Corrija ou aplique exceções.'); google.script.run.withSuccessHandler(r=>{const extra=`Protocolo: ${escapeAttr(r.protocol||'')}<br>${r.emailError?`Falha ao enviar e-mail: ${escapeAttr(r.emailError)}`:'E-mail enviado (quando configurado).'}`; showPdfModal('PDF de Análise', r.pdfLink, extra);}).withFailureHandler(e=>alert(e.message||e)).saveAndGeneratePdfAnalise(buildPayload())}
+function salvarCopia(){google.script.run.withSuccessHandler(r=>showPdfModal('PDF - Salvar cópia', r.pdfLink)).withFailureHandler(e=>alert(e.message||e)).generatePdfCopia(buildPayload())}
+function envioColab(){google.script.run.withSuccessHandler(r=>showPdfModal('PDF - Envio colaboradores', r.pdfLink)).withFailureHandler(e=>alert(e.message||e)).generatePdfColaboradores(buildPayload())}
+
+function loadProtocols(){
+  google.script.run.withSuccessHandler(r=>{
+    if(!r.merged) return alert((r.warnings||[]).join('\n')||'Nada para carregar');
+    const p=r.merged;
+    asyncApplyLoadedPayload(p);
+    if((r.warnings||[]).length) alert(r.warnings.join('\n'));
+  }).withFailureHandler(e=>alert(e.message||e)).loadProtocols(v('protocolos'));
+}
+
+init();
+</script>
+</body>
+</html>
