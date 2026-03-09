@@ -499,22 +499,26 @@ function buildWeeklyHtml_(payload, options) {
   let out = `<html><head><meta charset="utf-8"/><style>${pdfCss_()}</style></head><body><h1>${options.title} - ${payload.empresa}</h1>`;
   for (let start = 1; start <= daysInMonth; start += 7) {
     const end = Math.min(daysInMonth, start + 6);
-    out += `<section class="week-block"><h2>Dias ${start} a ${end}</h2><table><tr><th>Nome</th>`;
-    for (let d = start; d <= end; d++) out += `<th>${formatDateFullPt_(payload.ano, payload.mes, d)} ${buildHeaderObs_(payload, d, options.showPrevFat)}</th>`;
-    out += '</tr>';
+    out += `<section class="week-block"><h2>Dias ${start} a ${end}</h2><table class="weekly-grid"><thead><tr><th class="name-head">Nome</th>`;
+    for (let d = start; d <= end; d++) {
+      out += `<th class="day-head" colspan="3">${formatDateFullPt_(payload.ano, payload.mes, d)} ${buildHeaderObs_(payload, d, options.showPrevFat)}</th>`;
+    }
+    out += '</tr><tr><th class="name-subhead"></th>';
+    for (let d = start; d <= end; d++) out += '<th class="sub-head">Entrada</th><th class="sub-head">Intervalo</th><th class="sub-head">Saída</th>';
+    out += '</tr></thead><tbody>';
+
     (payload.rows || []).forEach(row => {
       const displayName = options.hideEscalaJornadaAfterName ? row.nome : `${row.nome} (${row.escala || '-'} / ${row.jornada || '-'})`;
-      out += `<tr><td>${displayName}</td>`;
+      out += `<tr><td class="name-col">${displayName}</td>`;
       for (let d = start; d <= end; d++) {
         let c = row.days[d - 1] || {};
         if (options.transformForColab) c = transformCellForColabPdf_(row, c, payload);
-        let text = [c.entrada || '-', c.intervalo || '-', c.saida || '-'].join(' / ');
-        if (c.isDobra && !options.hideDobraText) text += ' (dobra)';
-        out += `<td>${text}</td>`;
+        out += `<td class="time-col">${c.entrada || '-'}</td><td class="time-col">${c.intervalo || '-'}</td><td class="time-col">${c.saida || '-'}</td>`;
       }
       out += '</tr>';
     });
-    out += '</table></section>';
+
+    out += '</tbody></table></section>';
   }
   return out + '</body></html>';
 }
@@ -678,7 +682,7 @@ function buildDayGridHtml_(payload, day, showDobraText) {
   return html;
 }
 function pdfCss_() {
-  return `*{-webkit-print-color-adjust:exact;print-color-adjust:exact}body{font-family:Arial,sans-serif;font-size:10px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #bbb;padding:4px}.first{page-break-after:always}.day-block{break-inside:avoid;page-break-inside:avoid;break-before:auto}.week-block{break-inside:avoid;page-break-inside:avoid}.week-block + .week-block{page-break-before:always}.grid30 th,.grid30 td{font-size:8px;padding:2px}.grid30 .slot-head{background:#f6e9d6}.grid30 .name-head,.grid30 .name-col{background:#f6e9d6;font-weight:700}.grid30 th:last-child,.grid30 td:last-child{background:#f6e9d6;font-weight:700}.grid30 .slot{min-width:20px;width:20px;text-align:center}.grid30 .st-work{background:#dff2d8}.grid30 .st-break{background:#dbeafe}.grid30 .st-freela{background:#fff3bf}.grid30 .st-status{background:#ffe0e0}`;
+  return `*{-webkit-print-color-adjust:exact;print-color-adjust:exact}body{font-family:Arial,sans-serif;font-size:10px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #bbb;padding:4px}.first{page-break-after:always}.day-block{break-inside:avoid;page-break-inside:avoid;break-before:auto}.week-block{break-inside:avoid;page-break-inside:avoid}.week-block + .week-block{page-break-before:always}.weekly-grid{table-layout:auto}.weekly-grid .day-head{background:#f6e9d6;font-size:8px;text-align:center}.weekly-grid .sub-head,.weekly-grid .name-subhead{background:#fcf4e8;font-size:8px;text-align:center}.weekly-grid .name-head{background:#f6e9d6;text-align:left}.weekly-grid .name-col{text-align:left;font-weight:700;white-space:nowrap}.weekly-grid .time-col{text-align:center;font-size:9px;white-space:nowrap}.grid30 th,.grid30 td{font-size:8px;padding:2px}.grid30 .slot-head{background:#f6e9d6}.grid30 .name-head,.grid30 .name-col{background:#f6e9d6;font-weight:700}.grid30 th:last-child,.grid30 td:last-child{background:#f6e9d6;font-weight:700}.grid30 .slot{min-width:20px;width:20px;text-align:center}.grid30 .st-work{background:#dff2d8}.grid30 .st-break{background:#dbeafe}.grid30 .st-freela{background:#fff3bf}.grid30 .st-status{background:#ffe0e0}`;
 }
 
 function getWeatherForMonth(ano, mes) {
