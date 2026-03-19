@@ -61,6 +61,7 @@ function getBootstrapData() {
     colaboradores,
     funcoes,
     feriados: readDateDescMapByNamedRangeColumns_(ss, 'FERIAD', 24, 25),
+    feriadosPonto: readDateSetByNamedRange_(ss, 'FERIAD_PONTO'),
     eventos: readDateDescMapByNamedRangeColumns_(ss, 'EVENT', 0, 1),
     prevFat: readDateValueMapByNamedRangeColumns_(ss, 'PREV_FAT', 0, 2),
     weather: getWeatherForTiradentes_(ano, mes),
@@ -202,6 +203,14 @@ function readDateValueMapByNamedRangeColumns_(ss, namedRange, dateOffset, valueO
   return out;
 }
 
+function readDateSetByNamedRange_(ss, namedRange) {
+  const range = ss.getRangeByName(namedRange);
+  if (!range) return {};
+  const out = {};
+  range.getValues().forEach(r => { if (r[0]) out[dateKey_(r[0])] = true; });
+  return out;
+}
+
 function ensureEscalHeader_(ss) {
   const range = ss.getRangeByName('ESCAL');
   if (!range) throw new Error('Intervalo nomeado ESCAL não encontrado');
@@ -280,6 +289,8 @@ function validatePayload_(payload, opts) {
   const names = new Set();
   (payload.rows || []).forEach(row => {
     if (!row.nome) throw new Error('Linha sem nome');
+    let domMes = false;
+    let sundayDispensed = false;
     if (names.has(row.nome)) throw new Error(`Colaborador repetido no protocolo: ${row.nome}`);
     names.add(row.nome);
 
@@ -288,6 +299,8 @@ function validatePayload_(payload, opts) {
       day.entrada = n.entrada; day.intervalo = n.intervalo; day.saida = n.saida;
 
       const isSpecialDay = n.isSpecialDay;
+      if ((n.entrada === 'Dom. mês') && new Date(payload.ano, payload.mes - 1, idx + 1).getDay() === 0) domMes = true;
+      if ((n.entrada === 'Férias' || n.entrada === 'Licença') && new Date(payload.ano, payload.mes - 1, idx + 1).getDay() === 0) sundayDispensed = true;
       if (row.escala === '12x36' && (n.entrada === 'Dom. mês' || n.entrada === 'Abatimento')) {
         throw new Error(`Escala 12x36 não permite 'Dom. mês' nem 'Abatimento'. (${row.nome} dia ${idx + 1})`);
       }
@@ -329,6 +342,10 @@ function validatePayload_(payload, opts) {
           throw new Error(`Descanso mínimo entre jornadas é 11:00 em ${row.nome} (dia ${i + 2}). Ajuste a entrada ou marque a exceção ‘Descanso 11h’.`);
         }
       }
+    }
+
+    if (!row.isFreelancer && row.escala && row.escala !== '12x36' && !domMes && !sundayDispensed) {
+      throw new Error(`Falta pelo menos 1 'Dom. mês' em um domingo real neste mês: ${row.nome}`);
     }
 
     if (opts && opts.strictForSubmit && !row.isFreelancer) {
@@ -385,6 +402,7 @@ function validateTimeOrder_(entrada, intervalo, saida, duracaoIntervalo) {
 function computeAnalysis_(payload) {
   const dur = hhmmToMin_(payload.duracaoIntervalo);
   const daysInMonth = new Date(payload.ano, payload.mes, 0).getDate();
+  const feriadosPonto = payload.feriadosPonto || {};
   const out = {
     totalTaxi: 0,
     totalRefeicao: 0,
@@ -423,6 +441,7 @@ function computeAnalysis_(payload) {
           let extra = ex - en - dur - jornada;
           if (raw.isDobra || (CONFIG.SPECIAL_STATUSES.includes(e) && e !== 'Abatimento')) extra = 0;
           if (e === 'Abatimento') extra = -jornada;
+          if (row.escala !== '12x36' && feriadosPonto[`${payload.ano}-${String(payload.mes).padStart(2,'0')}-${String(d).padStart(2,'0')}`]) extra += jornada;
           out.bancoHorasByPerson[row.nome] = (out.bancoHorasByPerson[row.nome] || 0) + extra;
         }
       }
@@ -522,7 +541,7 @@ function buildWeeklyHtml_(payload, options) {
         let c = row.days[d - 1] || {};
         if (options.transformForColab) c = transformCellForColabPdf_(row, c, payload);
         const isSpecial = c.entrada && c.entrada === c.intervalo && c.entrada === c.saida && statusClassMap[c.entrada];
-        const statusClass = isSpecial ? ` ${statusClassMap[c.entrada]}` : '';
+        const statusClass = isSpecial ? ` ${statusClassMap[c.entrada]}` : ((c.entrada && /^\d{1,3}:\d{2}$/.test(c.entrada)) ? ' worked-day' : '');
         out += `<td class="time-col day-start${statusClass}">${c.entrada || '-'}</td><td class="time-col${statusClass}">${c.intervalo || '-'}</td><td class="time-col day-end${statusClass}">${c.saida || '-'}</td>`;
       }
       out += '</tr>';
@@ -560,7 +579,7 @@ function transformCellForColabPdf_(row, cell, payload) {
     const entradaMin = hhmmToMin_(c.entrada);
     const jornadaMin = hhmmToMin_(row.jornada);
     const durMin = hhmmToMin_(payload.duracaoIntervalo);
-    const saidaNormalMin = entradaMin + jornadaMin + durMin;
+    const saidaNormalMin = row.escala === '12x36' ? (entradaMin + jornadaMin) : (entradaMin + jornadaMin + durMin);
     const saidaNormal = minToHHMM_(saidaNormalMin);
 
     const hasException = !!(cell.exceptionExtra || cell.exceptionMaxSemInt || cell.exceptionEscala || cell.isDobra);
@@ -692,7 +711,7 @@ function buildDayGridHtml_(payload, day, showDobraText) {
   return html;
 }
 function pdfCss_() {
-  return `*{-webkit-print-color-adjust:exact;print-color-adjust:exact}body{font-family:Arial,sans-serif;font-size:10px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #bbb;padding:4px}.first{page-break-after:always}.day-block{break-inside:avoid;page-break-inside:avoid;break-before:auto}.week-block{break-inside:avoid;page-break-inside:avoid}.week-block + .week-block{page-break-before:always}.weekly-grid{table-layout:auto}.weekly-grid .day-head{background:#f6e9d6;font-size:8px;text-align:center}.weekly-grid .sub-head,.weekly-grid .name-subhead{background:#fcf4e8;font-size:8px;text-align:center}.weekly-grid .name-head{background:#f6e9d6;text-align:left}.weekly-grid .name-col{text-align:left;font-weight:700;white-space:nowrap}.weekly-grid .time-col{text-align:center;font-size:9px;white-space:nowrap}.weekly-grid .day-start{border-left:2px solid #8f8573}.weekly-grid .day-end{border-right:2px solid #8f8573}.weekly-grid .status-folga{background:#fdeaea}.weekly-grid .status-abatimento{background:#eaf7ea}.weekly-grid .status-dom-mes{background:#eaf2fd}.weekly-grid .status-licenca,.weekly-grid .status-ferias{background:#f3eafe}.grid30 th,.grid30 td{font-size:8px;padding:2px}.grid30 .slot-head{background:#f6e9d6}.grid30 .name-head,.grid30 .name-col{background:#f6e9d6;font-weight:700}.grid30 th:last-child,.grid30 td:last-child{background:#f6e9d6;font-weight:700}.grid30 .slot{min-width:20px;width:20px;text-align:center}.grid30 .st-work{background:#dff2d8}.grid30 .st-break{background:#dbeafe}.grid30 .st-freela{background:#fff3bf}.grid30 .st-status{background:#ffe0e0}`;
+  return `*{-webkit-print-color-adjust:exact;print-color-adjust:exact}body{font-family:Arial,sans-serif;font-size:10px}h2{margin:8px 0 4px}h3{margin:6px 0 4px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #bbb;padding:4px}.first{page-break-after:always}.day-block{break-inside:avoid;page-break-inside:avoid;break-before:auto}.week-block{break-inside:avoid;page-break-inside:avoid}.weekly-grid{table-layout:auto}.weekly-grid .day-head{background:#f6e9d6;font-size:8px;text-align:center}.weekly-grid .sub-head,.weekly-grid .name-subhead{background:#fcf4e8;font-size:8px;text-align:center}.weekly-grid .name-head{background:#f6e9d6;text-align:left}.weekly-grid .name-col{text-align:left;font-weight:700;white-space:nowrap}.weekly-grid .time-col{text-align:center;font-size:9px;white-space:nowrap}.weekly-grid .day-start{border-left:2px solid #8f8573}.weekly-grid .day-end{border-right:2px solid #8f8573}.weekly-grid .status-folga{background:#fdeaea}.weekly-grid .status-abatimento{background:#eaf7ea}.weekly-grid .status-dom-mes{background:#eaf2fd}.weekly-grid .status-licenca,.weekly-grid .status-ferias{background:#f3eafe}.weekly-grid .worked-day{background:#e8f5e4}.grid30 th,.grid30 td{font-size:8px;padding:2px}.grid30 .slot-head{background:#f6e9d6}.grid30 .name-head,.grid30 .name-col{background:#f6e9d6;font-weight:700}.grid30 th:last-child,.grid30 td:last-child{background:#f6e9d6;font-weight:700}.grid30 .slot{min-width:20px;width:20px;text-align:center}.grid30 .st-work{background:#dff2d8}.grid30 .st-break{background:#dbeafe}.grid30 .st-freela{background:#fff3bf}.grid30 .st-status{background:#ffe0e0}`;
 }
 
 function getWeatherForMonth(ano, mes) {

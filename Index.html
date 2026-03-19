@@ -14,7 +14,14 @@
     button{background:#fff;cursor:pointer}
     .chip{padding:2px 7px;border-radius:999px;font-size:10px;margin-right:3px;border:1px solid #d0d0d0;background:#fff}
     .loading{padding:20px;text-align:center;color:#8a6d3b}
-    #tableWrap{overflow:auto;max-height:70vh;border:1px solid #eee;border-radius:10px;background:#fff}
+    #tableWrap{overflow:auto;max-height:70vh;border:1px solid #eee;border-radius:10px;background:#fff;user-select:text;-webkit-user-select:text}
+    #tableWrap input{user-select:text;-webkit-user-select:text}
+    .aux-wrap{overflow:auto;border:1px solid #eee;border-radius:10px;background:#fff}
+    .aux-table{width:100%;border-collapse:collapse}
+    .aux-table th,.aux-table td{padding:6px;border:1px solid #eee;font-size:12px;vertical-align:top}
+    .aux-table th{background:#f6e9d6}
+    .aux-days{display:flex;flex-wrap:wrap;gap:6px;min-width:220px}
+    .aux-days label{display:flex;gap:4px;align-items:center;font-size:11px;color:#444}
     table{border-collapse:separate;border-spacing:0;min-width:100%}
     th,td{border-right:1px solid #f0ede8;border-bottom:1px solid #f0ede8;padding:4px;font-size:12px;white-space:nowrap}
     th{background:#f6e9d6}
@@ -61,8 +68,11 @@
   </div>
 
   <div id="headerFields" class="card"></div>
+  <div id="autoFillWrap" class="card"></div>
   <div id="tableWrap" class="card"></div>
   <div class="card row">
+    <button onclick="undoAction()">Desfazer</button>
+    <button onclick="redoAction()">Refazer</button>
     <button onclick="addRow()">+ Linha</button>
     <button onclick="removeRow()">- Linha</button>
     <button onclick="enviarAnalise()">Enviar para análise</button>
@@ -86,11 +96,13 @@
 <script>
 let bootstrap=null;
 let cellErrors={};
-let model={empresa:'',rows:[],feriados:{},eventos:{},prevFat:{},weather:{},freelancerCount:0,weekdayNames:['domingo','segunda-feira','terça-feira','quarta-feira','quinta-feira','sexta-feira','sábado']};
+let model={empresa:'',rows:[],feriados:{},feriadosPonto:{},eventos:{},prevFat:{},weather:{},freelancerCount:0,weekdayNames:['domingo','segunda-feira','terça-feira','quarta-feira','quinta-feira','sexta-feira','sábado'],autoFillConfigs:[]};
+let undoStack=[]; let redoStack=[]; let isRestoringHistory=false;
 const specialStatuses=['Folga','Abatimento','Dom. mês','Licença','Férias'];
 const empresaEl = document.getElementById('empresa');
 const empresaListEl = document.getElementById('empresaList');
 const headerFieldsEl = document.getElementById('headerFields');
+const autoFillWrapEl = document.getElementById('autoFillWrap');
 const tableWrapEl = document.getElementById('tableWrap');
 const modalOverlayEl = document.getElementById('modalOverlay');
 const modalTitleEl = document.getElementById('modalTitle');
@@ -102,7 +114,7 @@ function init(){
   setLoading(true);
   google.script.run.withSuccessHandler(d=>{
     bootstrap=d;
-    model.feriados=d.feriados||{}; model.eventos=d.eventos||{}; model.prevFat=d.prevFat||{}; model.weather=d.weather||{};
+    model.feriados=d.feriados||{}; model.feriadosPonto=d.feriadosPonto||{}; model.eventos=d.eventos||{}; model.prevFat=d.prevFat||{}; model.weather=d.weather||{};
     model.weekdayNames=(d.config&&d.config.weekdayNames)||model.weekdayNames;
     empresaListEl.innerHTML=(d.empresas||[]).map(e=>`<option value="${e}"></option>`).join('');
     empresaEl.onchange=onEmpresaChange; renderHeaderFields();
@@ -140,6 +152,16 @@ function moveErrTip(e){
   errTipEl.style.top = y+'px';
 }
 function hideErrTip(){ tipOpen=false; errTipEl.classList.add('hidden'); }
+
+function deepClone(obj){ return JSON.parse(JSON.stringify(obj)); }
+function captureHeaderState(){ return {empresa:v('empresa'), valorTaxi:v('valorTaxi'), valorRefeicao:v('valorRefeicao'), valorDobra:v('valorDobra'), emailAnalise:v('emailAnalise'), duracaoIntervalo:v('duracaoIntervalo'), maxSemIntervalo:v('maxSemIntervalo'), protocolo:v('protocolo'), mes:v('mes'), ano:v('ano'), valorHoraFreelancer:v('valorHoraFreelancer')}; }
+function applyHeaderState(h){ if(!h) return; Object.entries(h).forEach(([k,val])=>{ const el=document.getElementById(k); if(el) el.value=val; }); }
+function pushHistory(label){ if(isRestoringHistory) return; undoStack.push({label, model:deepClone(model), header:captureHeaderState()}); if(undoStack.length>50) undoStack.shift(); redoStack=[]; }
+function restoreHistoryEntry(entry){ if(!entry) return; isRestoringHistory=true; applyHeaderState(entry.header); model=deepClone(entry.model); syncDays(); validateAllClient(); renderAutoFillTable(); renderTable(); isRestoringHistory=false; }
+function undoAction(){ if(!undoStack.length) return; const current={model:deepClone(model), header:captureHeaderState()}; const prev=undoStack.pop(); redoStack.push(current); restoreHistoryEntry(prev); }
+function redoAction(){ if(!redoStack.length) return; const current={model:deepClone(model), header:captureHeaderState()}; const next=redoStack.pop(); undoStack.push(current); restoreHistoryEntry(next); }
+function ensureAutoFillConfigs(){ while(model.autoFillConfigs.length<model.rows.length) model.autoFillConfigs.push({entrada:'',intervalo:'',saida:'',avoidDays:[],avoidFeriados:false}); if(model.autoFillConfigs.length>model.rows.length) model.autoFillConfigs=model.autoFillConfigs.slice(0,model.rows.length); }
+function rowNameLabel(r){ return r.isFreelancer ? (r.nome||'Freelancer') : (r.nome||'—'); }
 function v(id){return document.getElementById(id).value}
 function field(id,l,t,val){return `<div class="field"><label>${l}</label><input id="${id}" type="${t}" value="${val??''}"></div>`}
 function daysInMonth(){return new Date(Number(v('ano')),Number(v('mes')),0).getDate()}
@@ -159,14 +181,14 @@ function renderHeaderFields(){
   if (!anoEl.value && bootstrap?.config?.yearDefault) anoEl.value = bootstrap.config.yearDefault;
 
   let anoTimer = null;
-  mesEl.addEventListener('change', ()=>{setLoading(true); setTimeout(()=>{syncDays(); validateAllClient(); renderTable(); refreshWeather(); setLoading(false)},80)});
+  mesEl.addEventListener('change', ()=>{setLoading(true); setTimeout(()=>{syncDays(); ensureAutoFillConfigs(); validateAllClient(); renderAutoFillTable(); renderTable(); refreshWeather(); setLoading(false)},80)});
   anoEl.addEventListener('change', ()=>{
     clearTimeout(anoTimer);
     anoTimer = setTimeout(()=>{
       const ano = Number(anoEl.value);
       google.script.run.withFailureHandler(()=>{}).setAnoAqui(ano);
       setLoading(true);
-      setTimeout(()=>{syncDays(); validateAllClient(); renderTable(); refreshWeather(); setLoading(false)},80);
+      setTimeout(()=>{syncDays(); ensureAutoFillConfigs(); validateAllClient(); renderAutoFillTable(); renderTable(); refreshWeather(); setLoading(false)},80);
     },200);
   });
 }
@@ -182,20 +204,20 @@ function onEmpresaChange(){
 
   setLoading(true);
   google.script.run.withSuccessHandler(()=>{
-    model.empresa=emp; model.rows=[]; model.freelancerCount=0;
+    model.empresa=emp; model.rows=[]; model.freelancerCount=0; model.autoFillConfigs=[]; undoStack=[]; redoStack=[];
     for(let i=0;i<(bootstrap?.config?.defaultRows||2);i++) addRow(false);
-    syncDays();
+    syncDays(); ensureAutoFillConfigs();
     validateAllClient();
-    renderTable();
+    renderAutoFillTable(); renderTable();
     refreshWeather();
     setLoading(false);
   }).withFailureHandler(e=>{ setLoading(false); alert(e.message||e); }).setAnoAqui(Number(anoEl.value));
 }
 
 function createEmptyDay(){return {entrada:'',intervalo:'',saida:'',exceptionMaxSemInt:false,exceptionExtra:false,exceptionEscala:false,exceptionRest11:false,isDobra:false}}
-function addRow(render=true){ if(!model.empresa) return; if(model.rows.length>=100) return; const d=(Number(v('mes'))&&Number(v('ano')))?daysInMonth():31; model.rows.push({nome:'',funcao:'',escala:'',jornada:'',isFreelancer:false,days:Array.from({length:d},createEmptyDay)}); if(render){validateAllClient(); renderTable();}}
-function removeRow(){ if(model.rows.length<=2) return; model.rows.pop(); validateAllClient(); renderTable();}
-function removeRowAt(ri){ if(model.rows.length<=2) return; model.rows.splice(ri,1); validateAllClient(); renderTable(); }
+function addRow(render=true){ if(!model.empresa) return; if(model.rows.length>=100) return; if(render) pushHistory('addRow'); const d=(Number(v('mes'))&&Number(v('ano')))?daysInMonth():31; model.rows.push({nome:'',funcao:'',escala:'',jornada:'',isFreelancer:false,days:Array.from({length:d},createEmptyDay)}); ensureAutoFillConfigs(); if(render){validateAllClient(); renderAutoFillTable(); renderTable();}}
+function removeRow(){ if(model.rows.length<=2) return; pushHistory('removeRow'); model.rows.pop(); ensureAutoFillConfigs(); validateAllClient(); renderAutoFillTable(); renderTable();}
+function removeRowAt(ri){ if(model.rows.length<=2) return; pushHistory('removeRowAt'); model.rows.splice(ri,1); ensureAutoFillConfigs(); validateAllClient(); renderAutoFillTable(); renderTable(); }
 function syncDays(){ const d=Number(v('mes'))&&Number(v('ano') )?daysInMonth():31; model.rows.forEach(r=>r.days=Array.from({length:d},(_,i)=>r.days[i]||createEmptyDay())); }
 
 function normalizeStatusOrTime(raw){
@@ -283,26 +305,31 @@ function recompute12x36Row(ri){
 
 
 function setColab(ri,val){
+  pushHistory('setColab');
   const c=(bootstrap.colaboradores||[]).find(x=>x.nome===val && x.empresa===model.empresa); if(!c) return;
   Object.assign(model.rows[ri],{isFreelancer:false,nome:c.nome,funcao:c.funcao,escala:c.escala,jornada:c.jornada});
   recompute12x36Row(ri);
-  validateAllClient(); renderTable();
+  ensureAutoFillConfigs();
+  validateAllClient(); renderAutoFillTable(); renderTable();
 }
 function toggleFreela(ri){
+  pushHistory('toggleFreela');
   const r=model.rows[ri];
   if(!r.isFreelancer){model.freelancerCount++; Object.assign(r,{isFreelancer:true,nome:`Freelancer ${model.freelancerCount}`,funcao:'',escala:'',jornada:''});}
   else Object.assign(r,{isFreelancer:false,nome:'',funcao:'',escala:'',jornada:''});
-  validateAllClient(); renderTable();
+  ensureAutoFillConfigs();
+  validateAllClient(); renderAutoFillTable(); renderTable();
 }
-function toggleExc(ri,di,key){const r=model.rows[ri]; if(r.escala==='12x36'&&key!=='isDobra') return; r.days[di][key]=!r.days[di][key]; recompute12x36Row(ri); validateAllClient(); renderTable();}
+function toggleExc(ri,di,key){pushHistory('toggleExc'); const r=model.rows[ri]; if(r.escala==='12x36'&&key!=='isDobra') return; r.days[di][key]=!r.days[di][key]; recompute12x36Row(ri); validateAllClient(); renderAutoFillTable(); renderTable();}
 
 function setCell(ri,di,key,val){
+  pushHistory('setCell');
   const r=model.rows[ri],c=r.days[di];
   val=normalizeStatusOrTime(val);
-  if(key==='entrada' && !val){c.entrada=''; c.intervalo=''; c.saida=''; recompute12x36Row(ri); validateAllClient(); renderTable(); return;}
+  if(key==='entrada' && !val){c.entrada=''; c.intervalo=''; c.saida=''; recompute12x36Row(ri); validateAllClient(); renderAutoFillTable(); renderTable(); return;}
   if(key==='entrada' && specialStatuses.includes(val)){
-    if(r.escala==='12x36' && ['Dom. mês','Abatimento'].includes(val)){ setError(ri,di,'entrada',"Escala 12x36 não permite 'Dom. mês' nem 'Abatimento'."); validateAllClient(); renderTable(); return; }
-    c.entrada=c.intervalo=c.saida=val; recompute12x36Row(ri); validateAllClient(); renderTable(); return;
+    if(r.escala==='12x36' && ['Dom. mês','Abatimento'].includes(val)){ setError(ri,di,'entrada',"Escala 12x36 não permite 'Dom. mês' nem 'Abatimento'."); validateAllClient(); renderAutoFillTable(); renderTable(); return; }
+    c.entrada=c.intervalo=c.saida=val; recompute12x36Row(ri); validateAllClient(); renderAutoFillTable(); renderTable(); return;
   }
 
   if(r.escala==='12x36' && key==='entrada' && isTime(val)){
@@ -320,7 +347,8 @@ function setCell(ri,di,key,val){
   }
   if(key==='intervalo'||key==='saida') c[key]=applyWrap(c.entrada,c[key]);
   recompute12x36Row(ri);
-  validateAllClient(); renderTable();
+  ensureAutoFillConfigs();
+  validateAllClient(); renderAutoFillTable(); renderTable();
 }
 
 function setError(ri,di,field,msg){cellErrors[ri]=cellErrors[ri]||{};cellErrors[ri][di]=cellErrors[ri][di]||{};cellErrors[ri][di][field]=msg}
@@ -332,7 +360,7 @@ function validateAllClient(){
   clearErrors(); syncDays();
   const dur=toMin(v('duracaoIntervalo')), maxSem=toMin(v('maxSemIntervalo'));
   model.rows.forEach((r,ri)=>{
-    let cons=0, domMes=false;
+    let cons=0, domMes=false, sundayDispensed=false;
     r.days.forEach((raw,di)=>{
       raw.entrada=normalizeStatusOrTime(raw.entrada); raw.intervalo=normalizeStatusOrTime(raw.intervalo); raw.saida=normalizeStatusOrTime(raw.saida);
       if (r.escala==='12x36') {
@@ -356,6 +384,7 @@ function validateAllClient(){
 
       if(allSpecial){
         if(raw.entrada==='Dom. mês' && new Date(Number(v('ano')),Number(v('mes'))-1,di+1).getDay()===0) domMes=true;
+        if(['Férias','Licença'].includes(raw.entrada) && new Date(Number(v('ano')),Number(v('mes'))-1,di+1).getDay()===0) sundayDispensed=true;
         cons=0; return;
       }
       if(isTime(raw.entrada)&&isTime(raw.intervalo)&&isTime(raw.saida)){
@@ -380,11 +409,11 @@ function validateAllClient(){
       }
     }
 
-    if(!r.isFreelancer && r.escala && r.escala!=='12x36' && !domMes) setError(ri,0,'entrada',"Falta pelo menos 1 'Dom. mês' em um domingo real neste mês.");
+    if(!r.isFreelancer && r.escala && r.escala!=='12x36' && !domMes && !sundayDispensed) setError(ri,0,'entrada',"Falta pelo menos 1 'Dom. mês' em um domingo real neste mês.");
   });
 }
 
-function rowIndicators(r,ri){const e=countRowErrors(ri); const domOk=r.isFreelancer||r.escala==='12x36'||r.days.some((c,i)=>c.entrada==='Dom. mês'&&new Date(Number(v('ano')),Number(v('mes'))-1,i+1).getDay()===0); return `<span class="chip">Dom mês: ${domOk?'OK':'Falta'}</span><span class="chip">Erros: ${e}</span>`}
+function rowIndicators(r,ri){const e=countRowErrors(ri); const domOk=r.isFreelancer||r.escala==='12x36'||r.days.some((c,i)=>(c.entrada==='Dom. mês' || ['Férias','Licença'].includes(c.entrada))&&new Date(Number(v('ano')),Number(v('mes'))-1,i+1).getDay()===0); return `<span class="chip">Dom mês: ${domOk?'OK':'Falta'}</span><span class="chip">Erros: ${e}</span>`}
 function statusClass(s){if(s==='Dom. mês') return 'status status-Dom'; if(s==='Licença') return 'status status-Licenca'; if(s==='Férias') return 'status status-Ferias'; if(s==='Folga'||s==='Abatimento') return `status status-${s}`; return ''}
 function cellClass(ri,di,field,c){let cls=''; if(specialStatuses.includes(c.entrada)) cls=statusClass(c.entrada); if(c.isDobra) cls+=' is-dobra'; if(getError(ri,di,field)) cls+=' cell-error'; return cls.trim()}
 
@@ -393,6 +422,7 @@ function colabEditor(ri,r){const arr=(bootstrap.colaboradores||[]).filter(c=>c.e
 function funcEditor(ri,r){if(!r.isFreelancer) return r.funcao||''; const fun=(bootstrap.funcoes||[]).filter(f=>f.empresasTokens.includes(model.empresa)).map(f=>f.nome); return `<input list='func_${ri}' value='${r.funcao||''}' onchange='model.rows[${ri}].funcao=this.value'><datalist id='func_${ri}'>${fun.map(n=>`<option value='${n}'></option>`).join('')}</datalist>`}
 
 function onPasteCell(ev,ri,di,field){
+  pushHistory('onPasteCell');
   const txt=(ev.clipboardData||window.clipboardData).getData('text');
   if(!txt || !txt.includes('\t') && !txt.includes('\n')) return;
   ev.preventDefault();
@@ -414,7 +444,7 @@ function onPasteCell(ev,ri,di,field){
     }
   }
   affectedRows.forEach(rIndex=>recompute12x36Row(rIndex));
-  validateAllClient(); renderTable();
+  validateAllClient(); renderAutoFillTable(); renderTable();
 }
 
 
@@ -437,8 +467,42 @@ function applyStickyOffsets(){
 const applyStickyOffsetsDebounced = debounce(applyStickyOffsets, 80);
 window.addEventListener('resize', applyStickyOffsetsDebounced);
 
+
+function weekdayMon0(day){ return (new Date(Number(v('ano')), Number(v('mes'))-1, day).getDay()+6)%7; }
+function isSundayReal(day){ return new Date(Number(v('ano')), Number(v('mes'))-1, day).getDay()===0; }
+function weekStartDay(day){ const wd=weekdayMon0(day); return Math.max(1, day-wd); }
+function weekEndDay(day){ return Math.min(daysInMonth(), weekStartDay(day)+6); }
+function isSpecialTriple(c){ return specialStatuses.includes(c.entrada) && c.entrada===c.intervalo && c.entrada===c.saida; }
+function isEmptyDay(c){ return !c.entrada && !c.intervalo && !c.saida; }
+function applyTimeTriple(dayObj, entrada, intervalo, saida){ dayObj.entrada=entrada||''; dayObj.intervalo=intervalo||''; dayObj.saida=saida||''; if(isTime(dayObj.intervalo)) dayObj.intervalo=applyWrap(dayObj.entrada, dayObj.intervalo); if(isTime(dayObj.saida)) dayObj.saida=applyWrap(dayObj.entrada, dayObj.saida); }
+function setSpecialTriple(dayObj, status){ dayObj.entrada=status; dayObj.intervalo=status; dayObj.saida=status; }
+function normalizeAutoInterval(cfg, jornada){ if(isTime(cfg.intervalo)) return cfg.intervalo; if(isTime(cfg.entrada) && isTime(jornada)){ return fromMin(toMin(cfg.entrada)+Math.round((toMin(jornada)/2)/30)*30); } return ''; }
+function currentTeamOffCount(day, excludeRi){ let n=0; model.rows.forEach((r,ri)=>{ if(ri===excludeRi) return; const c=r.days[day-1]||{}; if(['Folga','Dom. mês','Férias','Licença'].includes(c.entrada)) n++; }); return n; }
+function chooseSundayOffDay(ri, weekDays, avoidDays, avoidFeriados){ const sundays=weekDays.filter(d=>isSundayReal(d)); const dispensed=model.rows[ri].days.some((c,i)=> (c.entrada==='Férias' || c.entrada==='Licença') && isSundayReal(i+1)); if(dispensed || !sundays.length) return null; let best=null; let bestScore=Infinity; sundays.forEach(d=>{ const wd=weekdayMon0(d); let score=currentTeamOffCount(d,ri)*100; if(avoidDays.includes(wd)) score+=20; if(avoidFeriados && model.feriadosPonto[dateKey(d)]) score+=10; const c=model.rows[ri].days[d-1]; if(!isEmptyDay(c) && !['Folga','Dom. mês'].includes(c.entrada)) score+=1000; if(score<bestScore){ bestScore=score; best=d; } }); return best; }
+function pickOffDaysForWeek(ri, escala, start, end, avoidDays, avoidFeriados){ const need={'6x1':1,'5x2':2,'4x3':3}[escala]||0; const days=[]; for(let d=start; d<=end; d++) days.push(d); const sundayOff=chooseSundayOffDay(ri, days, avoidDays, avoidFeriados); const selected=[]; if(sundayOff) selected.push({day:sundayOff, status:'Dom. mês'});
+  const candidates=days.filter(d=>d!==sundayOff).map(d=>{ const wd=weekdayMon0(d); let score=currentTeamOffCount(d,ri)*100; if(avoidDays.includes(wd)) score+=25; if(avoidFeriados && model.feriadosPonto[dateKey(d)]) score+=15; if(isSundayReal(d)) score-=5; return {day:d,score}; }).sort((a,b)=>a.score-b.score || a.day-b.day);
+  while(selected.length<need && candidates.length){ if(escala==='5x2' || escala==='4x3'){ let bestIdx=0,bestScore=Infinity; for(let i=0;i<candidates.length;i++){ const c=candidates[i]; let score=c.score; if(selected.length){ const adj=selected.some(s=>Math.abs(s.day-c.day)===1); if(adj) score-=20; }
+        if(score<bestScore){bestScore=score; bestIdx=i;} }
+      const chosen=candidates.splice(bestIdx,1)[0]; selected.push({day:chosen.day,status:'Folga'}); }
+    else { const chosen=candidates.shift(); selected.push({day:chosen.day,status:'Folga'}); }
+  }
+  return selected.sort((a,b)=>a.day-b.day);
+}
+function applyAutoFillRow(ri){ const r=model.rows[ri]; const cfg=model.autoFillConfigs[ri]||{}; if(!r || !isTime(cfg.entrada)) return; pushHistory('autoFill'); const intervalo=normalizeAutoInterval(cfg, r.jornada||''); const saida=(r.escala==='12x36'&&isTime(r.jornada))?fromMin(toMin(cfg.entrada)+toMin(r.jornada)):(isTime(cfg.saida)?cfg.saida:(isTime(r.jornada)?fromMin(toMin(cfg.entrada)+toMin(r.jornada)+(isTime(v('duracaoIntervalo'))?toMin(v('duracaoIntervalo')):0)):''));
+  if(r.escala==='12x36'){ for(let i=0;i<r.days.length;i++){ const d=r.days[i]; if(d.isDobra){ applyTimeTriple(d, cfg.entrada, intervalo, saida); continue; } if(i%2===0) setSpecialTriple(d,'Folga'); else applyTimeTriple(d, cfg.entrada, intervalo, saida); } recompute12x36Row(ri); validateAllClient(); renderAutoFillTable(); renderTable(); return; }
+  const avoidDays=(cfg.avoidDays||[]).map(Number); const avoidFeriados=!!cfg.avoidFeriados; const sundayCovered=r.days.some((c,i)=>['Dom. mês','Férias','Licença'].includes(c.entrada)&&isSundayReal(i+1));
+  for(let start=1; start<=daysInMonth(); ){ const ws=weekStartDay(start), we=weekEndDay(start); const offs=pickOffDaysForWeek(ri, r.escala, ws, we, avoidDays, avoidFeriados); offs.forEach(({day,status})=>{ const c=r.days[day-1]; if(isEmptyDay(c) || ['Folga','Dom. mês'].includes(c.entrada)) setSpecialTriple(c,status); }); start=we+1; }
+  if(!sundayCovered){ const sunday=Array.from({length:daysInMonth()},(_,i)=>i+1).find(d=>isSundayReal(d) && isEmptyDay(r.days[d-1]||{})); if(sunday) setSpecialTriple(r.days[sunday-1],'Dom. mês'); }
+  r.days.forEach((d,i)=>{ if(isSpecialTriple(d)) return; if(!isEmptyDay(d)) return; applyTimeTriple(d, cfg.entrada, intervalo, saida); });
+  validateAllClient(); renderAutoFillTable(); renderTable();
+}
+function updateAutoFillField(ri,key,val){ ensureAutoFillConfigs(); model.autoFillConfigs[ri][key]=val; }
+function toggleAvoidDay(ri,dayIdx,checked){ ensureAutoFillConfigs(); const arr=new Set(model.autoFillConfigs[ri].avoidDays||[]); if(checked) arr.add(dayIdx); else arr.delete(dayIdx); model.autoFillConfigs[ri].avoidDays=Array.from(arr).sort(); }
+function renderAutoFillTable(){ ensureAutoFillConfigs(); if(!model.empresa || !model.rows.length){ autoFillWrapEl.innerHTML=''; return; } const names=['Seg','Ter','Qua','Qui','Sex','Sáb','Dom']; let h='<div class="aux-wrap"><table class="aux-table"><tr><th>Colaborador</th><th>Entrada padrão</th><th>Intervalo padrão</th><th>Saída padrão</th><th>Evitar folga</th><th>Evitar folgas em feriados</th><th>Ação</th></tr>'; model.rows.forEach((r,ri)=>{ const cfg=model.autoFillConfigs[ri]||{}; h+=`<tr><td>${escapeAttr(rowNameLabel(r))}</td><td><input value="${escapeAttr(cfg.entrada||'')}" onchange="updateAutoFillField(${ri},'entrada',this.value)"></td><td><input value="${escapeAttr(cfg.intervalo||'')}" onchange="updateAutoFillField(${ri},'intervalo',this.value)"></td><td><input value="${escapeAttr(cfg.saida||'')}" onchange="updateAutoFillField(${ri},'saida',this.value)"></td><td><div class="aux-days">${names.map((n,idx)=>`<label><input type='checkbox' ${(cfg.avoidDays||[]).includes(idx)?'checked':''} onchange='toggleAvoidDay(${ri},${idx},this.checked)'>${n}</label>`).join('')}</div></td><td style='text-align:center'><input type='checkbox' ${cfg.avoidFeriados?'checked':''} onchange="updateAutoFillField(${ri},'avoidFeriados',this.checked)"></td><td><button class='chip' onclick='applyAutoFillRow(${ri})'>Preencher</button></td></tr>`; }); h+='</table></div>'; autoFillWrapEl.innerHTML=h; }
+
 function renderTable(){
-  const mes=Number(v('mes')),ano=Number(v('ano')); if(!mes||!ano||!model.empresa){tableWrapEl.innerHTML=''; return}
+  ensureAutoFillConfigs();
+  const mes=Number(v('mes')),ano=Number(v('ano')); if(!mes||!ano||!model.empresa){autoFillWrapEl.innerHTML=''; tableWrapEl.innerHTML=''; return}
   let h='<table><colgroup><col style="width:260px"><col style="width:180px"><col style="width:110px"><col style="width:110px"></colgroup><tr>';
   h+='<th class="sticky-head sticky-col sticky-col-1">Linha</th><th class="sticky-head sticky-col sticky-col-2">Função</th><th class="sticky-head sticky-col sticky-col-3">Escala</th><th class="sticky-head sticky-col sticky-col-4">Jornada</th>';
   for(let d=1;d<=daysInMonth();d++) h+=`<th class='sticky-head' colspan='4'>${dateLabel(d)}<br><span class='small'>${headerObs(d)}</span></th>`;
@@ -475,15 +539,15 @@ function asyncApplyLoadedPayload(p){
     let maxN = 0;
     model.rows.forEach(r=>{ const m=String(r.nome||'').match(/^Freelancer\s+(\d+)/i); if(m) maxN=Math.max(maxN, Number(m[1])); });
     model.freelancerCount = maxN;
-    syncDays();
+    syncDays(); ensureAutoFillConfigs();
     validateAllClient();
     refreshWeather();
-    renderTable();
+    renderAutoFillTable(); renderTable();
     setLoading(false);
   }).withFailureHandler(e=>{ setLoading(false); alert(e.message||e); }).setAnoAqui(Number(p.ano));
 }
 
-function buildPayload(){return {empresa:v('empresa'),valorTaxi:Number(v('valorTaxi')),valorRefeicao:Number(v('valorRefeicao')),valorDobra:Number(v('valorDobra')),emailAnalise:v('emailAnalise'),duracaoIntervalo:v('duracaoIntervalo'),maxSemIntervalo:v('maxSemIntervalo'),protocolo:v('protocolo'),mes:Number(v('mes')),ano:Number(v('ano')),valorHoraFreelancer:Number(v('valorHoraFreelancer')),rows:model.rows,feriados:model.feriados,eventos:model.eventos,prevFat:model.prevFat}}
+function buildPayload(){return {empresa:v('empresa'),valorTaxi:Number(v('valorTaxi')),valorRefeicao:Number(v('valorRefeicao')),valorDobra:Number(v('valorDobra')),emailAnalise:v('emailAnalise'),duracaoIntervalo:v('duracaoIntervalo'),maxSemIntervalo:v('maxSemIntervalo'),protocolo:v('protocolo'),mes:Number(v('mes')),ano:Number(v('ano')),valorHoraFreelancer:Number(v('valorHoraFreelancer')),rows:model.rows,feriados:model.feriados,feriadosPonto:model.feriadosPonto,eventos:model.eventos,prevFat:model.prevFat,autoFillConfigs:model.autoFillConfigs}}
 
 function enviarAnalise(){validateAllClient(); if(Object.keys(cellErrors).length) return alert('Existem erros destacados em amarelo. Corrija ou aplique exceções.'); google.script.run.withSuccessHandler(r=>{const extra=`Protocolo: ${escapeAttr(r.protocol||'')}<br>${r.emailError?`Falha ao enviar e-mail: ${escapeAttr(r.emailError)}`:'E-mail enviado (quando configurado).'}`; showPdfModal('PDF de Análise', r.pdfLink, extra);}).withFailureHandler(e=>alert(e.message||e)).saveAndGeneratePdfAnalise(buildPayload())}
 function salvarCopia(){google.script.run.withSuccessHandler(r=>showPdfModal('PDF - Salvar cópia', r.pdfLink)).withFailureHandler(e=>alert(e.message||e)).generatePdfCopia(buildPayload())}
