@@ -492,19 +492,33 @@ function chooseAbatimentoDayInRun(ri, runStart, runEnd, slotsNeeded, avoidDays, 
 }
 function rebalanceConsecutiveRuns_(ri, cfg){ const r=model.rows[ri]; const limit={'6x1':6,'5x2':5,'4x3':4}[r.escala]; if(!limit) return; const avoidDays=(cfg.avoidDays||[]).map(Number); const avoidFeriados=!!cfg.avoidFeriados; let day=1; while(day<=r.days.length){ if(!isWorkedDayForAuto(r.days[day-1])){ day++; continue; } const start=day; while(day<=r.days.length && isWorkedDayForAuto(r.days[day-1])) day++; const end=day-1; const len=end-start+1; if(len<=limit) continue; const slotsNeeded=Math.ceil(len/(limit+1)); const abatimentoDays=chooseAbatimentoDayInRun(ri,start,end,slotsNeeded,avoidDays,avoidFeriados); abatimentoDays.forEach(d=>setSpecialTriple(r.days[d-1],'Abatimento')); }
 }
-function applyAutoFillRow(ri){ const r=model.rows[ri]; const cfg=model.autoFillConfigs[ri]||{}; if(!r || !isTime(cfg.entrada)) return; pushHistory('autoFill'); const intervalo=normalizeAutoInterval(cfg, r.jornada||''); const saida=(r.escala==='12x36'&&isTime(r.jornada))?fromMin(toMin(cfg.entrada)+toMin(r.jornada)):(isTime(cfg.saida)?cfg.saida:(isTime(r.jornada)?fromMin(toMin(cfg.entrada)+toMin(r.jornada)+(isTime(v('duracaoIntervalo'))?toMin(v('duracaoIntervalo')):0)):''));
-  if(r.escala==='12x36'){ for(let i=0;i<r.days.length;i++){ const d=r.days[i]; if(d.isDobra){ applyTimeTriple(d, cfg.entrada, intervalo, saida); continue; } if(i%2===0) setSpecialTriple(d,'Folga'); else applyTimeTriple(d, cfg.entrada, intervalo, saida); } recompute12x36Row(ri); validateAllClient(); renderAutoFillTable(); renderTable(); return; }
-  const avoidDays=(cfg.avoidDays||[]).map(Number); const avoidFeriados=!!cfg.avoidFeriados; const monthlyDomMesDay=needsMonthlyDomMes(r) ? chooseMonthlyDomMesDay(ri, avoidDays, avoidFeriados) : null;
-  r.days.forEach((d,i)=>{ if(d.entrada==='Dom. mês' && (i+1)!==monthlyDomMesDay) setSpecialTriple(d,'Folga'); });
-  if(monthlyDomMesDay){ const target=r.days[monthlyDomMesDay-1]; if(isEmptyDay(target) || ['Folga','Dom. mês'].includes(target.entrada)) setSpecialTriple(target,'Dom. mês'); }
-  for(let start=1; start<=daysInMonth(); ){ const ws=weekStartDay(start), we=weekEndDay(start); const lockedOffDays=new Set(); if(monthlyDomMesDay && monthlyDomMesDay>=ws && monthlyDomMesDay<=we) lockedOffDays.add(monthlyDomMesDay); const offs=pickRemainingOffDaysForWeek(ri, r.escala, ws, we, avoidDays, avoidFeriados, lockedOffDays); offs.forEach(day=>{ const c=r.days[day-1]; if(isEmptyDay(c) || ['Folga','Dom. mês','Abatimento'].includes(c.entrada)) setSpecialTriple(c,'Folga'); }); start=we+1; }
-  r.days.forEach(d=>{ if(isSpecialTriple(d)) return; if(!isEmptyDay(d)) return; applyTimeTriple(d, cfg.entrada, intervalo, saida); });
-  rebalanceConsecutiveRuns_(ri, cfg);
-  validateAllClient(); renderAutoFillTable(); renderTable();
+function applyAutoFillRow(ri){
+  const r=model.rows[ri];
+  const cfg=model.autoFillConfigs[ri]||{};
+  if(!r || !isTime(cfg.entrada)) return;
+  pushHistory('autoFill');
+
+  const entradaPadrao = cfg.entrada;
+  const intervaloPadrao = isTime(cfg.intervalo)
+    ? cfg.intervalo
+    : normalizeAutoInterval(cfg, r.jornada||'');
+  const saidaPadrao = isTime(cfg.saida)
+    ? cfg.saida
+    : (isTime(r.jornada)
+        ? fromMin(toMin(entradaPadrao)+toMin(r.jornada)+(isTime(v('duracaoIntervalo'))?toMin(v('duracaoIntervalo')):0))
+        : '');
+
+  for(let i=0;i<r.days.length;i++){
+    applyTimeTriple(r.days[i], entradaPadrao, intervaloPadrao, saidaPadrao);
+  }
+
+  validateAllClient();
+  renderAutoFillTable();
+  renderTable();
 }
 function updateAutoFillField(ri,key,val){ ensureAutoFillConfigs(); model.autoFillConfigs[ri][key]=val; }
 function toggleAvoidDay(ri,dayIdx,checked){ ensureAutoFillConfigs(); const arr=new Set(model.autoFillConfigs[ri].avoidDays||[]); if(checked) arr.add(dayIdx); else arr.delete(dayIdx); model.autoFillConfigs[ri].avoidDays=Array.from(arr).sort(); }
-function renderAutoFillTable(){ ensureAutoFillConfigs(); if(!model.empresa || !model.rows.length){ autoFillWrapEl.innerHTML=''; return; } const names=['Seg','Ter','Qua','Qui','Sex','Sáb','Dom']; let h='<div class="aux-wrap"><table class="aux-table"><tr><th>Colaborador</th><th>Entrada padrão</th><th>Intervalo padrão</th><th>Saída padrão</th><th>Evitar folga</th><th>Evitar folgas em feriados</th><th>Ação</th></tr>'; model.rows.forEach((r,ri)=>{ const cfg=model.autoFillConfigs[ri]||{}; h+=`<tr><td>${escapeAttr(rowNameLabel(r))}</td><td><input value="${escapeAttr(cfg.entrada||'')}" onchange="updateAutoFillField(${ri},'entrada',this.value)"></td><td><input value="${escapeAttr(cfg.intervalo||'')}" onchange="updateAutoFillField(${ri},'intervalo',this.value)"></td><td><input value="${escapeAttr(cfg.saida||'')}" onchange="updateAutoFillField(${ri},'saida',this.value)"></td><td><div class="aux-days">${names.map((n,idx)=>`<label><input type='checkbox' ${(cfg.avoidDays||[]).includes(idx)?'checked':''} onchange='toggleAvoidDay(${ri},${idx},this.checked)'>${n}</label>`).join('')}</div></td><td style='text-align:center'><input type='checkbox' ${cfg.avoidFeriados?'checked':''} onchange="updateAutoFillField(${ri},'avoidFeriados',this.checked)"></td><td><button class='chip' onclick='applyAutoFillRow(${ri})'>Preencher</button></td></tr>`; }); h+='</table></div>'; autoFillWrapEl.innerHTML=h; }
+function renderAutoFillTable(){ ensureAutoFillConfigs(); if(!model.empresa || !model.rows.length){ autoFillWrapEl.innerHTML=''; return; } let h='<div class="aux-wrap"><table class="aux-table"><tr><th>Colaborador</th><th>Entrada padrão</th><th>Intervalo padrão</th><th>Saída padrão</th><th>Ação</th></tr>'; model.rows.forEach((r,ri)=>{ const cfg=model.autoFillConfigs[ri]||{}; h+=`<tr><td>${escapeAttr(rowNameLabel(r))}</td><td><input value="${escapeAttr(cfg.entrada||'')}" onchange="updateAutoFillField(${ri},'entrada',this.value)"></td><td><input value="${escapeAttr(cfg.intervalo||'')}" onchange="updateAutoFillField(${ri},'intervalo',this.value)"></td><td><input value="${escapeAttr(cfg.saida||'')}" onchange="updateAutoFillField(${ri},'saida',this.value)"></td><td><button class='chip' onclick='applyAutoFillRow(${ri})'>Preencher</button></td></tr>`; }); h+='</table></div>'; autoFillWrapEl.innerHTML=h; }
 
 function renderTable(){
   ensureAutoFillConfigs();
