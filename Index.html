@@ -495,13 +495,25 @@ function rebalanceConsecutiveRuns_(ri, cfg){ const r=model.rows[ri]; const limit
 function applyAutoFillRow(ri){
   const r=model.rows[ri];
   const cfg=model.autoFillConfigs[ri]||{};
-  if(!r || !isTime(cfg.entrada)) return;
+  if(!r) return;
+
+  const entradaNorm = normalizeStatusOrTime(cfg.entrada||'');
+  if(!entradaNorm) return;
   pushHistory('autoFill');
 
-  const entradaPadrao = cfg.entrada;
+  if(specialStatuses.includes(entradaNorm)){
+    for(let i=0;i<r.days.length;i++) setSpecialTriple(r.days[i], entradaNorm);
+    validateAllClient();
+    renderAutoFillTable();
+    renderTable();
+    return;
+  }
+
+  if(!isTime(entradaNorm)) return;
+  const entradaPadrao = entradaNorm;
   const intervaloPadrao = isTime(cfg.intervalo)
     ? cfg.intervalo
-    : normalizeAutoInterval(cfg, r.jornada||'');
+    : normalizeAutoInterval({entrada:entradaPadrao, intervalo:cfg.intervalo}, r.jornada||'');
   const saidaPadrao = isTime(cfg.saida)
     ? cfg.saida
     : (isTime(r.jornada)
