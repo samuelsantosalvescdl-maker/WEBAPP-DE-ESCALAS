@@ -137,7 +137,7 @@ function saveAndGeneratePdfAnalise(payload) {
 
 function generatePdfCopia(payload) {
   validatePayload_(payload, { strictForSubmit: false });
-  const html = buildWeeklyHtml_(payload, { title: 'Salvar cópia', showPrevFat: false, hideEscalaJornadaAfterName: false, hideDobraText: false, transformForColab: false });
+  const html = buildWeeklyHtml_(payload, { title: 'Salvar cópia', showPrevFat: false, hideEscalaJornadaAfterName: true, hideDobraText: false, transformForColab: false });
   return { ok: true, pdfLink: saveHtmlPdf_(html, `copia_${payload.protocol || generateProtocol_()}.pdf`) };
 }
 
@@ -523,10 +523,18 @@ function buildWeeklyHtml_(payload, options) {
     'Férias': 'status-ferias',
   };
 
-  let out = `<html><head><meta charset="utf-8"/><style>${pdfCss_()}</style></head><body><h1>${options.title} - ${payload.empresa}</h1>`;
+  let out = `<html><head><meta charset="utf-8"/><style>${pdfCss_()}</style></head><body class="weekly-pdf"><h1>${options.title} - ${payload.empresa}</h1>`;
   for (let start = 1; start <= daysInMonth; start += 7) {
     const end = Math.min(daysInMonth, start + 6);
-    out += `<section class="week-block"><h2>Dias ${start} a ${end}</h2><table class="weekly-grid"><thead><tr><th class="name-head">Nome</th>`;
+    const visibleDays = end - start + 1;
+    const nameColWidth = 13;
+    const timeColWidth = Number(((100 - nameColWidth) / (visibleDays * 3)).toFixed(4));
+
+    out += `<section class="week-block"><h2>Dias ${start} a ${end}</h2><table class="weekly-grid"><colgroup><col style="width:${nameColWidth}%"/>`;
+    for (let d = start; d <= end; d++) {
+      out += `<col style="width:${timeColWidth}%"/><col style="width:${timeColWidth}%"/><col style="width:${timeColWidth}%"/>`;
+    }
+    out += `</colgroup><thead><tr><th class="name-head">Nome</th>`;
     for (let d = start; d <= end; d++) {
       out += `<th class="day-head day-start day-end" colspan="3">${formatDateFullPt_(payload.ano, payload.mes, d)} ${buildHeaderObs_(payload, d, options.showPrevFat)}</th>`;
     }
@@ -711,7 +719,7 @@ function buildDayGridHtml_(payload, day, showDobraText) {
   return html;
 }
 function pdfCss_() {
-  return `*{-webkit-print-color-adjust:exact;print-color-adjust:exact}body{font-family:Arial,sans-serif;font-size:10px}h2{margin:8px 0 4px}h3{margin:6px 0 4px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #bbb;padding:4px}.first{page-break-after:always}.day-block{break-inside:avoid;page-break-inside:avoid;break-before:auto}.week-block{break-inside:avoid;page-break-inside:avoid}.weekly-grid{table-layout:auto}.weekly-grid .day-head{background:#f6e9d6;font-size:8px;text-align:center}.weekly-grid .sub-head,.weekly-grid .name-subhead{background:#fcf4e8;font-size:8px;text-align:center}.weekly-grid .name-head,.weekly-grid .name-col{background:#f6e9d6;text-align:left}.weekly-grid .name-col{font-weight:700;white-space:nowrap}.weekly-grid .time-col{text-align:center;font-size:9px;white-space:nowrap}.weekly-grid .day-start{border-left:2px solid #8f8573}.weekly-grid .day-end{border-right:2px solid #8f8573}.weekly-grid .status-folga{background:#fdeaea}.weekly-grid .status-abatimento{background:#eaf7ea}.weekly-grid .status-dom-mes{background:#eaf2fd}.weekly-grid .status-licenca,.weekly-grid .status-ferias{background:#f3eafe}.weekly-grid .worked-day{background:#e8f5e4}.grid30 th,.grid30 td{font-size:8px;padding:2px}.grid30 .slot-head{background:#f6e9d6}.grid30 .name-head,.grid30 .name-col{background:#f6e9d6;font-weight:700}.grid30 th:last-child,.grid30 td:last-child{background:#f6e9d6;font-weight:700}.grid30 .slot{min-width:20px;width:20px;text-align:center}.grid30 .st-work{background:#dff2d8}.grid30 .st-break{background:#dbeafe}.grid30 .st-freela{background:#fff3bf}.grid30 .st-status{background:#ffe0e0}`;
+  return `*{-webkit-print-color-adjust:exact;print-color-adjust:exact}@page{size:A4 portrait;margin:8mm}body{font-family:Arial,sans-serif;font-size:10px;margin:0}body.weekly-pdf{font-size:9px}body.weekly-pdf .week-block{break-inside:avoid;page-break-inside:avoid}body.weekly-pdf .weekly-grid{table-layout:fixed;width:100%}body.weekly-pdf .weekly-grid th,body.weekly-pdf .weekly-grid td{padding:2px 3px;font-size:8px}body.weekly-pdf .weekly-grid .name-head,body.weekly-pdf .weekly-grid .name-col{max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}body.weekly-pdf .weekly-grid .day-head{font-size:7px;line-height:1.15;padding:2px}body.weekly-pdf .weekly-grid .sub-head,body.weekly-pdf .weekly-grid .name-subhead{font-size:7px;padding:2px}body.weekly-pdf .weekly-grid .time-col{text-align:center;white-space:nowrap;font-size:8px}h2{margin:8px 0 4px}h3{margin:6px 0 4px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #bbb;padding:4px}.first{page-break-after:always}.day-block{break-inside:avoid;page-break-inside:avoid;break-before:auto}.week-block{break-inside:avoid;page-break-inside:avoid}.weekly-grid .day-head{background:#f6e9d6;font-size:8px;text-align:center}.weekly-grid .sub-head,.weekly-grid .name-subhead{background:#fcf4e8;font-size:8px;text-align:center}.weekly-grid .name-head,.weekly-grid .name-col{background:#f6e9d6;text-align:left}.weekly-grid .name-col{font-weight:700;white-space:nowrap}.weekly-grid .time-col{text-align:center;font-size:9px;white-space:nowrap}.weekly-grid .day-start{border-left:2px solid #8f8573}.weekly-grid .day-end{border-right:2px solid #8f8573}.weekly-grid .status-folga{background:#fdeaea}.weekly-grid .status-abatimento{background:#eaf7ea}.weekly-grid .status-dom-mes{background:#eaf2fd}.weekly-grid .status-licenca,.weekly-grid .status-ferias{background:#f3eafe}.weekly-grid .worked-day{background:#e8f5e4}.grid30 th,.grid30 td{font-size:8px;padding:2px}.grid30 .slot-head{background:#f6e9d6}.grid30 .name-head,.grid30 .name-col{background:#f6e9d6;font-weight:700}.grid30 th:last-child,.grid30 td:last-child{background:#f6e9d6;font-weight:700}.grid30 .slot{min-width:20px;width:20px;text-align:center}.grid30 .st-work{background:#dff2d8}.grid30 .st-break{background:#dbeafe}.grid30 .st-freela{background:#fff3bf}.grid30 .st-status{background:#ffe0e0}`;
 }
 
 function getWeatherForMonth(ano, mes) {
